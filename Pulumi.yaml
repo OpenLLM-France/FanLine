@@ -1,0 +1,6 @@
+name: lucie-queue
+runtime:
+  name: python
+  options:
+    virtualenv: venv
+description: Système de file d'attente pour Lucie LLM 
