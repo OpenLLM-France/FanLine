@@ -1,4 +1,4 @@
-# Lucie LLM Queue
+![Lucie LLM Queue Header](assets/readme_header.webp)
 
 
 
