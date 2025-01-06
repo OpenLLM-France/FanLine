@@ -21,6 +21,24 @@ Lucie est déployée via une interface basée sur open web-ui, permettant au pub
 - Mécanisme de file d'attente transparent avec notifications en temps réel
 - Intégration seamless avec l'interface open web-ui
 
+### Dernier build -TEST- :
+
+<details>
+<summary>Cliquez pour déplier/replier</summary>
+
+#### TEST RESULT
+
+1. **Mode test-only **
+```
+{output}
+```
+Votre contenu ici (laissez une ligne vide après le summary)
+- Point 1
+- Point 2
+- Point 3
+
+</details>
+
 ## Table des matières
 - 1. [Introduction](#introduction)
 -   - [1.1. Le Contexte](#le-contexte)  
@@ -54,12 +72,18 @@ Lucie est déployée via une interface basée sur open web-ui, permettant au pub
 - **Celery** : Gestion des tâches asynchrones
 - **Docker** : Service management
 
-# Installation
-
 ### Prérequis
 - Python 3.12+
 - Docker et Docker Compose
 - Poetry
+
+
+
+<details>
+<summary> <h2 id="installation"> Installation</h2></summary>
+
+<div style="margin-left: 20px; padding: 10px; border-left: 2px solid #3eaf7c;">
+
 
 ### Installation avec Poetry
 
@@ -81,8 +105,13 @@ docker-compose up -d
 ```bash
 docker-compose down
 ```
+</div>
+</details>
 
-## Configuration
+<details>
+<summary> <h2 id="configuration"> Configuration</h2></summary>
+
+<div style="margin-left: 20px; padding: 10px; border-left: 2px solid #3eaf7c;">
 
 ### Variables d'environnement
 
@@ -100,9 +129,16 @@ SESSION_DURATION=1200 # 20 minutes
 DRAFT_DURATION=300 # 5 minutes
 ```
 
+</div>
+</details>
+
 # Utilisation
 
-## Démarrage en mode dev
+<details>
+<summary> <h2 id="modedev"> Démarrage en mode dev</h2></summary>
+
+<div style="margin-left: 20px; padding: 10px; border-left: 2px solid #3eaf7c;">
+
 
 ### Lancement auto reload pour traquer les changements
 ```bash
@@ -124,7 +160,14 @@ docker-compose up -d
 ```bash
 docker-compose logs -f
 ```
-## Scripts CLI
+
+</div>
+</details>
+
+<details>
+<summary> <h2 id="scriptscli">Scripts CLI</h2></summary>
+
+<div style="margin-left: 20px; padding: 10px; border-left: 2px solid #3eaf7c;">
 
 ### Script de développement (`poetry run dev`)
 
@@ -150,8 +193,45 @@ test run [--cov] [--html] [test_path]
 ```
 #### Tests dans Docker
 ```bash
-test docker
+test docker [--logs] [--test-only]
 ```
+
+#### Exemples de sortie
+
+1. **Mode test-only**
+```
+============================= test session starts ==============================
+platform linux -- Python 3.9.19, pytest-7.4.4, pluggy-1.5.0
+rootdir: /app
+plugins: asyncio-0.21.2, anyio-3.7.1, cov-4.1.0
+collected 7 items
+
+tests/test_api_endpoints.py::TestAPI::test_join_queue_flow_with_available_slots PASSED
+tests/test_api_endpoints.py::TestAPI::test_join_queue_flow_when_full PASSED
+tests/test_integration.py::TestIntegration::test_concurrent_users PASSED
+tests/test_integration.py::TestIntegration::test_requeue_mechanism PASSED
+tests/test_queue_manager.py::TestQueueManager::test_add_to_queue PASSED
+tests/test_queue_manager.py::TestQueueManager::test_draft_flow PASSED
+tests/test_queue_manager.py::TestQueueManager::test_draft_expiration PASSED
+
+---------- coverage: platform linux, python 3.9.19-final-0 -----------
+Name                   Stmts   Miss  Cover
+------------------------------------------
+app/main.py               30      5    83%
+app/queue_manager.py      82      8    90%
+------------------------------------------
+TOTAL                    112     13    88%
+
+============================== 7 passed in 0.40s ==============================
+```
+
+#### Options de test
+| Option | Description |
+|--------|-------------|
+| `--logs` | Affiche les logs détaillés des tests |
+| `--test-only` | Affiche uniquement les résultats des tests (sans logs Docker) |
+| `--cov` | Active la couverture de code |
+| `--html` | Génère un rapport HTML de couverture |
 
 ### Script de formatage (`poetry run format`)
 #### option de formatage
@@ -161,6 +241,14 @@ test docker
 | format isort | Tri des imports |
 | format lint | Vérification avec flake8 |
 | format all | Exécute tous les formatages |
+
+
+</div>
+</details>
+
+
+
+
 
 ### Script de test de charge (`poetry run load-test`)
 #### Test utilisateur unique
@@ -213,22 +301,25 @@ poetry run test docker
 
 
 ### États utilisateur
-- **Waiting** : En attente dans la file
-- **Draft** : Slot temporairement réservé
-- **Active** : Session active
+- **Waiting** : En attente dans la file (position > 0)
+- **Draft** : Slot disponible et temporairement réservé (5 minutes pour confirmer)
+- **Connected** : Session active (20 minutes)
 - **Disconnected** : Déconnecté du système
 
-### Notifications Redis
-
+### Transitions d'états
+1. `Waiting → Draft` : Quand un slot devient disponible
+2. `Draft → Connected` : Après confirmation dans les 5 minutes
+3. `Draft → Waiting` : Si pas de confirmation dans les 5 minutes (retour en file)
+4. `Connected → Disconnected` : Après 20 minutes ou déconnexion manuelle
 
 ### Notifications Redis
 | Canal | Description | Exemple de message |
 |-------|-------------|-------------------|
-| `queue_status:{user_id}` | Notifications de statut par utilisateur | ```{"status": "waiting", "position": 5}``` |
-| `queue_status:{user_id}` | Slot disponible | ```{"status": "slot_available", "duration": 300}``` |
+| `queue_status:{user_id}` | En attente | ```{"status": "waiting", "position": 5}``` |
+| `queue_status:{user_id}` | Slot disponible | ```{"status": "draft", "duration": 300}``` |
 | `queue_status:{user_id}` | Connexion confirmée | ```{"status": "connected", "session_duration": 1200}``` |
-| `queue_status:{user_id}` | Session expirée | ```{"status": "expired", "reason": "session_timeout"}``` |
-| `queue_status:{user_id}` | Draft expiré | ```{"status": "expired", "reason": "draft_timeout"}``` |
+| `queue_status:{user_id}` | Session expirée | ```{"status": "disconnected", "reason": "session_timeout"}``` |
+| `queue_status:{user_id}` | Draft expiré | ```{"status": "waiting", "reason": "draft_timeout", "position": 5}``` |
 
 ### Exemples de scénarios de notification
 
@@ -315,14 +406,14 @@ Le projet utilise un Makefile pour automatiser l'installation et la configuratio
 1. **Installation complète automatique** :
 ```bash
 make setup
-source ~/.bashrc  # ou redémarrez votre terminal
+source ~/.bashrc  
 ```
 
 2. **Installation étape par étape** :
 ```bash
 # Installation de pyenv
 make install-pyenv
-source ~/.bashrc  # ou redémarrez votre terminal
+source ~/.bashrc 
 
 # Installation de Python 3.12
 make install-python

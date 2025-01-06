@@ -1,50 +1,62 @@
 version: '3.8'
 
 services:
+  redis-test:
+    image: redis:alpine
+    ports:
+      - "6380:6379"
+    networks:
+      - test-network
+    command: redis-server --appendonly yes --save 1 1
+    volumes:
+      - redis-test-data:/data
+
   api:
     build:
       context: .
       dockerfile: Dockerfile.test
-    ports:
-      - "8000:8000"
     environment:
-      REDIS_HOST: redis-test
-      CELERY_BROKER_URL: redis://redis-test:6379/1
-      CELERY_RESULT_BACKEND: redis://redis-test:6379/1
-      REDIS_DB: 1
-      PYTHONPATH: /app
-      APP_MODULE: app.main:app
+      - REDIS_HOST=redis-test
+      - REDIS_PORT=6379
+      - REDIS_DB=1
+      - PYTHONPATH=/app
+      - CELERY_BROKER_URL=redis://redis-test:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis-test:6379/1
+    ports:
+      - "8001:8000"
     depends_on:
       - redis-test
+    networks:
+      - test-network
     volumes:
       - ./app:/app/app
       - ./tests:/app/tests
-    networks:
-      - test-network
+    command: poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   test:
     build:
       context: .
       dockerfile: Dockerfile.test
     environment:
-      REDIS_HOST: redis-test
-      CELERY_BROKER_URL: redis://redis-test:6379/1
-      CELERY_RESULT_BACKEND: redis://redis-test:6379/1
-      REDIS_DB: 1
-      PYTHONPATH: /app
+      - REDIS_HOST=redis-test
+      - REDIS_PORT=6379
+      - REDIS_DB=1
+      - PYTHONPATH=/app
+      - CELERY_BROKER_URL=redis://redis-test:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis-test:6379/1
+      - API_URL=http://api:8000
     depends_on:
       - redis-test
+      - api
+    networks:
+      - test-network
     volumes:
       - ./app:/app/app
       - ./tests:/app/tests
-    networks:
-      - test-network
-    command: ["pytest", "--cov=app", "tests/"]
+    command: poetry run pytest -v --cov=app --cov-report=term-missing
 
-  redis-test:
-    image: redis:alpine
-    networks:
-      - test-network
+volumes:
+  redis-test-data:
 
 networks:
   test-network:
