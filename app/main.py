@@ -24,13 +24,13 @@ async def confirm_connection(user_id: str) -> Dict:
 @app.get("/queue/status/{user_id}")
 async def get_status(user_id: str) -> Dict:
     """Endpoint pour obtenir le statut d'un utilisateur."""
+    position = queue_manager.redis.lpos('waiting_queue', user_id)
+    if position is not None:
+        return {"status": "waiting", "position": position + 1}
     if queue_manager.redis.sismember('active_users', user_id):
         return {"status": "active"}
     if queue_manager.redis.sismember('draft_users', user_id):
         return {"status": "draft"}
-    position = queue_manager.redis.lpos('waiting_queue', user_id)
-    if position is not None:
-        return {"status": "waiting", "position": position + 1}
     return {"status": "disconnected"}
 
 @app.get("/queue/metrics")

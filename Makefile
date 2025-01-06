@@ -20,14 +20,16 @@ install-pyenv:
 	fi
 
 install-python:
-	@echo "Installing Python $(PYTHON_VERSION)..."
+	@echo "Installation de Python $(PYTHON_VERSION)..."
 	@if pyenv versions | grep $(PYTHON_VERSION) >/dev/null 2>&1; then \
-		echo "Python $(PYTHON_VERSION) is already installed"; \
+		echo "Python $(PYTHON_VERSION) est déjà installé"; \
 	else \
 		pyenv install $(PYTHON_VERSION); \
 	fi
 	@pyenv local $(PYTHON_VERSION)
 	@python -m pip install --upgrade pip
+
+# Usage: make install-python PYTHON_VERSION=3.12.1
 
 install-poetry:
 	@echo "Installing Poetry..."

@@ -3,6 +3,9 @@ name = "queue-system"
 version = "0.1.0"
 description = "Système de file d'attente avec FastAPI et Redis"
 authors = ["Your Name <your.email@example.com>"]
+packages = [
+    { include = "app" }
+]
 
 [tool.poetry.dependencies]
 python = "^3.9"

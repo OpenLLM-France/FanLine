@@ -49,10 +49,10 @@ Lucie est déployée via une interface basée sur open web-ui, permettant au pub
 - 🔔 Notifications via Redis Pub/Sub
 
 # Architecture
-- **FastAPI** : API REST et WebSocket
-- **Redis** : Stockage et pub/sub
+- **FastAPI** : APIrest et Websocket
+- **Redis** : Cache et pub/sub
 - **Celery** : Gestion des tâches asynchrones
-- **Docker** : Conteneurisation
+- **Docker** : Service management
 
 # Installation
 

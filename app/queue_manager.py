@@ -15,20 +15,36 @@ class QueueManager:
         self.redis = Redis(
             host=os.getenv('REDIS_HOST', 'localhost'),
             port=int(os.getenv('REDIS_PORT', 6379)),
-            db=int(os.getenv('REDIS_DB', 0))
+            db=int(os.getenv('REDIS_DB', 0)),
+            decode_responses=True
         )
         self.pubsub = self.redis.pubsub()
         self.max_active_users = int(os.getenv('MAX_ACTIVE_USERS', 50))
         self.session_duration = int(os.getenv('SESSION_DURATION', 1200))
         self.draft_duration = int(os.getenv('DRAFT_DURATION', 300))
 
+    async def publish_status(self, user_id: str, position: int, status: str = "waiting"):
+        """Publie le statut de l'utilisateur dans la file d'attente."""
+        message = {
+            "user_id": user_id,
+            "status": status,
+            "position": position
+        }
+        self.redis.publish(f'queue_status:{user_id}', json.dumps(message))
+
     async def add_to_queue(self, user_id: str) -> int:
         """Ajoute un utilisateur à la file d'attente principale."""
         if not self.redis.sismember('active_users', user_id) and not self.redis.sismember('draft_users', user_id):
-            self.redis.rpush('waiting_queue', user_id)
-            position = self.redis.llen('waiting_queue')
+            with self.redis.pipeline() as pipe:
+                pipe.rpush('waiting_queue', user_id)
+                pipe.llen('waiting_queue')
+                results = pipe.execute()
+                position = results[1]
+
             await self.publish_status(user_id, position)
-            await self.check_available_slots()
+            
+            # Vérifie les slots disponibles de manière asynchrone
+            asyncio.create_task(self.check_available_slots())
             return position
         return 0
 
@@ -53,17 +69,11 @@ class QueueManager:
             pipe.execute()
 
         handle_draft_expiration.apply_async(args=[user_id], countdown=self.draft_duration)
-
-        status = {
-            "user_id": user_id,
-            "status": "slot_available",
-            "duration": self.draft_duration
-        }
-        self.redis.publish(f'queue_status:{user_id}', json.dumps(status))
+        await self.publish_status(user_id, 0, status="slot_available")
 
     async def confirm_connection(self, user_id: str) -> bool:
         """Confirme la connexion d'un utilisateur."""
-        if self.redis.sismember('draft_users', user_id):
+        if self.redis.sismember('draft_users', user_id) and self.redis.exists(f'draft:{user_id}'):
             with self.redis.pipeline() as pipe:
                 pipe.srem('draft_users', user_id)
                 pipe.sadd('active_users', user_id)
@@ -102,7 +112,12 @@ class QueueManager:
 @celery_app.task
 def handle_draft_expiration(user_id: str):
     """Gère l'expiration d'un draft."""
-    redis = Redis(host='localhost', port=6379, db=0)
+    redis = Redis(
+        host=os.getenv('REDIS_HOST', 'localhost'),
+        port=int(os.getenv('REDIS_PORT', 6379)),
+        db=int(os.getenv('REDIS_DB', 0)),
+        decode_responses=True
+    )
     if redis.sismember('draft_users', user_id):
         queue_manager = QueueManager()
         asyncio.run(queue_manager.requeue_user(user_id))
@@ -110,6 +125,11 @@ def handle_draft_expiration(user_id: str):
 @celery_app.task
 def cleanup_session(user_id: str):
     """Nettoie la session expirée."""
-    redis = Redis(host='localhost', port=6379, db=0)
+    redis = Redis(
+        host=os.getenv('REDIS_HOST', 'localhost'),
+        port=int(os.getenv('REDIS_PORT', 6379)),
+        db=int(os.getenv('REDIS_DB', 0)),
+        decode_responses=True
+    )
     redis.srem('active_users', user_id)
     redis.delete(f'session:{user_id}') 

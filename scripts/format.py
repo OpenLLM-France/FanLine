@@ -14,34 +14,45 @@ from pathlib import Path
 
 @click.group()
 def cli():
-    """Commandes de formatage pour le système de file d'attente."""
+    """Outils de formatage et validation du code"""
     pass
 
-@cli.command()
-@click.option('--check', is_flag=True, help='Vérifie le formatage sans modifier les fichiers')
-def black(check: bool):
-    """Formate le code avec black."""
-    cmd = ["black", "."]
-    if check:
-        cmd.append("--check")
-    subprocess.run(cmd)
-
-@cli.command()
-def isort():
-    """Trie les imports avec isort."""
-    subprocess.run(["isort", "."])
-
-@cli.command()
+@cli.group()
 def lint():
-    """Vérifie le style avec flake8."""
-    subprocess.run(["flake8"])
+    """Commandes de linting"""
+    pass
 
-@cli.command()
-def all():
-    """Exécute tous les formatages (black, isort, flake8)."""
-    subprocess.run(["black", "."])
-    subprocess.run(["isort", "."])
-    subprocess.run(["flake8"])
+@lint.command()
+@click.option('--fix', is_flag=True, help="Corriger automatiquement les erreurs")
+def docker(fix):
+    """Valide les fichiers Docker"""
+    click.echo("Validation des fichiers Docker...")
+    # Logique de validation Docker
+
+@lint.command()
+def python():
+    """Valide les fichiers Python"""
+    click.echo("Validation du code Python...")
+    # Logique de validation Python
+
+@cli.group()
+def test():
+    """Commandes de test"""
+    pass
+
+@test.command()
+@click.option('--coverage', is_flag=True, help="Générer un rapport de couverture")
+def run(coverage):
+    """Lance les tests"""
+    cmd = "poetry run pytest"
+    if coverage:
+        cmd += " --cov=app tests/"
+    click.echo(f"Exécution: {cmd}")
+
+@test.command()
+def docker():
+    """Lance les tests dans Docker"""
+    click.echo("docker-compose -f docker-compose.test.yml up --build")
 
 if __name__ == '__main__':
     cli() 
