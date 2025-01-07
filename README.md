@@ -76,9 +76,25 @@ Votre contenu ici (laissez une ligne vide après le summary)
 - Python 3.12+
 - Docker et Docker Compose
 - Poetry
+<details>
+<summary><h3>📊 Schémas de la file d'attente</h3></summary>
 
+<div align="left" style="margin-left: 20px; border-left: 2px solid #3eaf7c; padding: 10px;">
 
+![Queue Architecture](queue-architecture-1.png)
 
+</div>
+</details>
+
+<details>
+<summary><h3>🏗️ Schémas de l'Architecture</h3></summary>
+
+<div align="left" style="margin-left: 20px; border-left: 2px solid #3eaf7c; padding: 10px;">
+
+![Architecture](architecture-1.png)
+
+</div>
+</details>
 <details>
 <summary> <h2 id="installation"> Installation</h2></summary>
 

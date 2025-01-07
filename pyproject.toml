@@ -30,6 +30,7 @@ debugpy = "^1.8.11"
 dev = "scripts.dev:cli"
 test = "scripts.test:cli"
 format = "scripts.format:cli"
+readme = "scripts.update_readme:cli"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
