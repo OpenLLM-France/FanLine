@@ -1,4 +1,0 @@
-config:
-  lucie-queue:maxActiveUsers: "50"
-  lucie-queue:sessionDuration: "1200"
-  lucie-queue:draftDuration: "300" 

@@ -4,10 +4,48 @@ from celery import Celery
 import json
 import asyncio
 import time
+import logging
 
-celery_app = Celery('queue_tasks',
-                    broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'),
-                    backend=os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0'))
+# Configuration de Celery
+celery = Celery('queue_manager')
+
+logger = logging.getLogger('test_logger')
+
+# Configuration de base
+celery.conf.update(
+    broker_url='redis://localhost:6379/0',
+    result_backend='redis://localhost:6379/0',
+    broker_connection_retry=False,
+    broker_connection_max_retries=0,
+    task_serializer='json',
+    accept_content=['json'],
+    result_serializer='json',
+    timezone='UTC',
+    enable_utc=True,
+    worker_max_tasks_per_child=1000,
+    worker_prefetch_multiplier=1,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    task_track_started=True
+)
+
+# Forcer le mode eager si en test
+if os.environ.get('TESTING') == 'true':
+    logger.info("Mode TEST détecté, activation du mode EAGER")
+    celery.conf.update(
+        task_always_eager=True,
+        task_eager_propagates=True,
+        worker_prefetch_multiplier=1,
+        task_acks_late=False,
+        task_track_started=True,
+        task_send_sent_event=True,
+        task_remote_tracebacks=True,
+        task_store_errors_even_if_ignored=True,
+        task_ignore_result=False
+    )
+    logger.info(f"Configuration Celery en mode EAGER: {celery.conf.task_always_eager}")
+
+logger.info(f"Mode Celery au démarrage: EAGER={celery.conf.task_always_eager}")
 
 class QueueManager:
     """Gestionnaire de file d'attente avec Redis."""
@@ -19,18 +57,10 @@ class QueueManager:
         self.draft_duration = int(os.getenv('DRAFT_DURATION', 300))
         self._slot_check_task = None
         self._stop_slot_check = False
+        logger.debug(f"QueueManager initialisé avec max_active_users={self.max_active_users}")
 
     async def _verify_queue_state(self, user_id: str, expected_state: dict) -> bool:
-        """Vérifie l'état de la file d'attente pour un utilisateur.
-        
-        Args:
-            user_id: L'identifiant de l'utilisateur
-            expected_state: Dictionnaire contenant les états attendus:
-                - in_queue: bool - Si l'utilisateur doit être dans queued_users
-                - in_waiting: bool - Si l'utilisateur doit être dans waiting_queue
-                - in_draft: bool - Si l'utilisateur doit être dans draft_users
-                - in_active: bool - Si l'utilisateur doit être dans active_users
-        """
+        """Vérifie l'état de la file d'attente pour un utilisateur."""
         try:
             async with self.redis.pipeline(transaction=True) as pipe:
                 pipe.sismember('queued_users', user_id)
@@ -46,17 +76,16 @@ class QueueManager:
                     'in_active': bool(results[3])
                 }
                 
-
                 for key, expected in expected_state.items():
                     if actual_state[key] != expected:
-                        print(f"❌ Incohérence détectée - {key}: attendu={expected}, actuel={actual_state[key]}")
+                        logger.warning(f"Incohérence détectée pour {user_id} - {key}: attendu={expected}, actuel={actual_state[key]}")
                         return False
                         
-                print(f"✅ État vérifié - {actual_state}")
+                logger.debug(f"État vérifié pour {user_id} - {actual_state}")
                 return True
                 
         except Exception as e:
-            print(f"❌ Erreur lors de la vérification: {str(e)}")
+            logger.error(f"Erreur lors de la vérification pour {user_id}: {str(e)}")
             return False
 
     async def _check_slots_after_add(self):
@@ -213,14 +242,15 @@ class QueueManager:
     async def offer_slot(self, user_id: str):
         """Offre un slot à un utilisateur."""
         try:
+            logger.info(f"Tentative d'offre de slot à {user_id}")
             async with self.redis.pipeline(transaction=True) as pipe:
                 pipe.lpop('waiting_queue')
                 pipe.srem('queued_users', user_id)
                 pipe.sadd('draft_users', user_id)
                 pipe.setex(f'draft:{user_id}', self.draft_duration, '1')
                 await pipe.execute()
+                logger.debug(f"Slot offert à {user_id}, durée de draft: {self.draft_duration}s")
 
-                # Vérifier l'état après l'offre du slot
                 expected_state = {
                     'in_queue': False,
                     'in_waiting': False,
@@ -230,20 +260,21 @@ class QueueManager:
                 if not await self._verify_queue_state(user_id, expected_state):
                     raise Exception("État incohérent après l'offre du slot")
 
-            # Publier la notification de draft disponible
             await self.redis.publish(f'queue_status:{user_id}', 
                 json.dumps({
                     "status": "draft",
                     "duration": self.draft_duration
                 })
             )
+            logger.info(f"Notification de draft envoyée à {user_id}")
+            
         except Exception as e:
-            print(f"Erreur lors de l'offre du slot : {str(e)}")
-            # Nettoyage en cas d'erreur
+            logger.error(f"Erreur lors de l'offre du slot à {user_id}: {str(e)}")
             async with self.redis.pipeline(transaction=True) as pipe:
                 pipe.srem('draft_users', user_id)
                 pipe.delete(f'draft:{user_id}')
                 await pipe.execute()
+                logger.debug(f"Nettoyage effectué pour {user_id} après erreur")
 
     async def confirm_connection(self, user_id: str) -> bool:
         """Confirme la connexion d'un utilisateur."""
@@ -322,111 +353,253 @@ class QueueManager:
             "total_slots": self.max_active_users
         }
 
-    async def get_timers(self, user_id: str) -> dict:
+    async def get_timers(self, user_id: str, max_updates: int = 3) -> dict:
         """Obtient les timers actifs et démarre la tâche de mise à jour"""
         try:
+            logger.info(f"Récupération des timers pour {user_id}")
             timers = {}
             
             # check session active
             is_active = await self.redis.sismember('active_users', user_id)
-            if is_active:
+            is_draft = await self.redis.sismember('draft_users', user_id)
+            logger.debug(f"État de {user_id} - actif: {is_active}, draft: {is_draft}")
+            
+            # Vérifier le mode Celery
+            is_eager = celery.conf.task_always_eager
+            logger.info(f"Mode Celery: {'EAGER/TEST' if is_eager else 'PRODUCTION'} (task_always_eager={is_eager})")
+            
+            if is_active and not is_draft:
                 session_ttl = await self.redis.ttl(f'session:{user_id}')
+                logger.debug(f"TTL de session pour {user_id}: {session_ttl}")
                 if session_ttl > 0:
-                    timers['session'] = {
+                    timers = {
                         'ttl': session_ttl,
-                        'channel': f'timer:session:{user_id}'
+                        'channel': f'timer:channel:{user_id}',
+                        'timer_type': 'session'
                     }
-                    # start update session timer
-                    update_timer_channel.delay(
-                        timers['session']['channel'], 
-                        session_ttl,
-                        'session'
-                    )
+                    logger.info(f"Démarrage du timer de session pour {user_id} (max_updates: {max_updates})")
+                    
+                    try:
+                        if is_eager:
+                            logger.debug("Mode EAGER: exécution synchrone de update_timer_channel")
+                            await update_timer_channel(
+                                timers['channel'], 
+                                timers['ttl'], 
+                                timers['timer_type'], 
+                                max_updates
+                            )
+                            logger.debug("Tâche update_timer_channel exécutée avec succès")
+                        else:
+                            logger.debug("Mode PRODUCTION: planification asynchrone de update_timer_channel")
+                            update_timer_channel.apply_async(
+                                args=[timers['channel'], timers['ttl'], timers['timer_type'], max_updates],
+                                countdown=1
+                            )
+                    except Exception as e:
+                        logger.error(f"Erreur lors du démarrage de la tâche timer: {str(e)}")
+                        logger.exception(e)
+                        # On continue pour retourner les timers même si la tâche échoue
                     
             # check draft active
-            is_draft = await self.redis.sismember('draft_users', user_id)
-            if is_draft:
+            elif is_draft and not is_active:
                 draft_ttl = await self.redis.ttl(f'draft:{user_id}')
+                logger.debug(f"TTL de draft pour {user_id}: {draft_ttl}")
                 if draft_ttl > 0:
-                    timers['draft'] = {
+                    timers = {
                         'ttl': draft_ttl,
-                        'channel': f'timer:draft:{user_id}'
+                        'channel': f'timer:channel:{user_id}',
+                        'timer_type': 'draft'
                     }
-                    # start update draft timer
-                    update_timer_channel.delay(
-                        timers['draft']['channel'], 
-                        draft_ttl,
-                        'draft'
-                    )
+                    logger.info(f"Démarrage du timer de draft pour {user_id} (max_updates: {max_updates})")
+                    
+                    try:
+                        if is_eager:
+                            logger.debug("Mode EAGER: exécution synchrone de update_timer_channel")
+                            await update_timer_channel(
+                                timers['channel'], 
+                                timers['ttl'], 
+                                timers['timer_type'], 
+                                max_updates
+                            )
+                            logger.debug("Tâche update_timer_channel exécutée avec succès")
+                        else:
+                            logger.debug("Mode PRODUCTION: planification asynchrone de update_timer_channel")
+                            update_timer_channel.apply_async(
+                                args=[timers['channel'], timers['ttl'], timers['timer_type'], max_updates],
+                                countdown=1
+                            )
+                    except Exception as e:
+                        logger.error(f"Erreur lors du démarrage de la tâche timer: {str(e)}")
+                        logger.exception(e)
+                        # On continue pour retourner les timers même si la tâche échoue
+            else:
+                logger.warning(f"Utilisateur {user_id} n'est ni en draft ni actif")
                     
             return timers
             
         except Exception as e:
-            print(f"Erreur lors de la récupération des timers: {str(e)}")
+            logger.error(f"Erreur lors de la récupération des timers pour {user_id}: {str(e)}")
+            logger.exception(e)
             return {}
 
-@celery_app.task
+@celery.task
 async def handle_draft_expiration(user_id: str):
-    """Gère l'expiration d'un draft."""
-    redis = Redis(
-        host=os.getenv('REDIS_HOST', 'localhost'),
-        port=int(os.getenv('REDIS_PORT', 6379)),
-        db=int(os.getenv('REDIS_DB', 0)),
-        decode_responses=True
-    )
-    is_draft = await redis.sismember('draft_users', user_id)
-    if is_draft:
-        queue_manager = QueueManager(redis)
-        await queue_manager.add_to_queue(user_id)
-    await redis.aclose()
-
-@celery_app.task
-async def cleanup_session(user_id: str):
-    """Nettoie la session expirée."""
-    redis = Redis(
-        host=os.getenv('REDIS_HOST', 'localhost'),
-        port=int(os.getenv('REDIS_PORT', 6379)),
-        db=int(os.getenv('REDIS_DB', 0)),
-        decode_responses=True
-    )
-    await redis.srem('active_users', user_id)
-    await redis.delete(f'session:{user_id}')
-    await redis.aclose() 
-
-@celery_app.task
-async def update_timer_channel(channel: str, initial_ttl: int, timer_type: str):
-    """Tâche Celery qui met à jour le timer sur un canal"""
-    redis = Redis(
-        host=os.getenv('REDIS_HOST', 'localhost'),
-        port=int(os.getenv('REDIS_PORT', 6379)),
-        db=int(os.getenv('REDIS_DB', 0)),
-        decode_responses=True
-    )
-    
+    """Gère l'expiration du draft d'un utilisateur."""
+    logger.info(f"Début de la tâche d'expiration de draft pour {user_id}")
     try:
-        # check if subscribers listen to channel
-        subscribers = await redis.pubsub_numsub(channel)
-        if subscribers[0][1] == 0:  # if no one listen
-            return
-            
-        # publish timer update
-        await redis.publish(
-            channel,
-            json.dumps({
-                "type": "timer_update",
-                "timer_type": timer_type,  # draft or session
-                "ttl": initial_ttl
-            })
+        redis = Redis(
+            host=os.getenv('REDIS_HOST', 'localhost'),
+            port=int(os.getenv('REDIS_PORT', 6379)),
+            db=int(os.getenv('REDIS_DB', 0)),
+            decode_responses=True
         )
         
-        # recursif  ttl-1
-        if initial_ttl > 0:
-            update_timer_channel.apply_async(
-                args=[channel, initial_ttl - 1, timer_type],
-                countdown=1
-            )
+        async with redis.pipeline(transaction=True) as pipe:
+            pipe.srem('draft_users', user_id)
+            pipe.delete(f'draft:{user_id}')
+            await pipe.execute()
+            logger.debug(f"Draft expiré pour {user_id}, utilisateur retiré du draft")
+            
+        await redis.publish(f'queue_status:{user_id}', 
+            json.dumps({
+                "status": "expired",
+                "message": "Draft expiré"
+            })
+        )
+        logger.info(f"Notification d'expiration envoyée à {user_id}")
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de l'expiration du draft de {user_id}: {str(e)}")
+    finally:
+        await redis.aclose()
+        logger.debug(f"Connexion Redis fermée pour {user_id}")
+
+@celery.task
+async def cleanup_session(user_id: str):
+    """Nettoie la session d'un utilisateur."""
+    logger.info(f"Début de la tâche de nettoyage de session pour {user_id}")
+    try:
+        redis = Redis(
+            host=os.getenv('REDIS_HOST', 'localhost'),
+            port=int(os.getenv('REDIS_PORT', 6379)),
+            db=int(os.getenv('REDIS_DB', 0)),
+            decode_responses=True
+        )
+        
+        async with redis.pipeline(transaction=True) as pipe:
+            pipe.srem('active_users', user_id)
+            pipe.delete(f'session:{user_id}')
+            await pipe.execute()
+            logger.debug(f"Session terminée pour {user_id}, utilisateur retiré des actifs")
             
     except Exception as e:
-        print(f"Erreur dans la mise à jour du timer: {str(e)}")
+        logger.error(f"Erreur lors du nettoyage de la session de {user_id}: {str(e)}")
     finally:
-        await redis.aclose() 
+        await redis.aclose()
+        logger.debug(f"Connexion Redis fermée pour {user_id}")
+
+@celery.task
+async def update_timer_channel(channel: str, initial_ttl: int, timer_type: str, max_updates: int = 10):
+    """Met à jour le canal de timer pour un utilisateur de manière récursive."""
+    logger.info(f"Début de la tâche de mise à jour du timer pour {channel} (TTL initial: {initial_ttl})")
+    
+    # Forcer le mode EAGER en test
+    if os.environ.get('TESTING') == 'true':
+        celery.conf.update(task_always_eager=True)
+    
+    logger.debug(f"Mode Celery actuel dans la tâche: EAGER={celery.conf.task_always_eager}")
+    
+    redis = None
+    result = {"status": "error", "ttl": initial_ttl, "updates_left": max_updates}
+    
+    try:
+        redis = Redis(
+            host=os.getenv('REDIS_HOST', 'localhost'),
+            port=int(os.getenv('REDIS_PORT', 6379)),
+            db=int(os.getenv('REDIS_DB', 0)),
+            decode_responses=True
+        )
+        
+        # Extraire l'ID utilisateur et le type de timer de la clé
+        await asyncio.sleep(1)
+        user_id = channel.replace('timer:channel:', '')
+        key = f"{timer_type}:{user_id}"  # session:user_id ou draft:user_id
+        
+        # Vérifier que la clé existe et obtenir son TTL réel
+        ttl = await redis.ttl(key)
+        logger.debug(f"TTL actuel pour {key}: {ttl}")
+        if ttl <= 0:
+            logger.info(f"La clé {key} n'existe plus ou a expiré (TTL={ttl})")
+            result["status"] = "expired"
+            result["ttl"] = ttl
+            return result
+            
+        logger.debug(f"TTL réel pour {key}: {ttl}")
+        result["ttl"] = ttl
+        
+        # Vérifier si l'utilisateur est connecté
+        is_active = await redis.sismember('active_users', user_id)
+        is_draft = await redis.sismember('draft_users', user_id)
+        
+        # Ajuster max_updates en fonction de l'état
+        if timer_type == 'session' and not is_active:
+            logger.debug(f"Utilisateur {user_id} pas encore actif, pas de décompte des updates")
+            effective_max_updates = max_updates  # On ne décrémente pas
+        elif timer_type == 'draft' and not is_draft:
+            logger.debug(f"Utilisateur {user_id} pas encore en draft, pas de décompte des updates")
+            effective_max_updates = max_updates  # On ne décrémente pas
+        else:
+            effective_max_updates = max_updates - 1  # On décrémente normalement
+            
+        if ttl > 0 and max_updates > 0:
+            # Publier la mise à jour
+            message = {
+                "ttl": ttl,
+                "timer_type": timer_type
+            }
+            await redis.publish(channel, json.dumps(message))
+            logger.debug(f"Timer publié pour {channel}: {message}")
+            
+            # En mode eager, on attend un peu et on rappelle directement
+            if celery.conf.task_always_eager:
+                logger.debug("Mode EAGER: exécution synchrone de la prochaine mise à jour")
+                await asyncio.sleep(0.1)  # Délai réduit en mode test
+                try:
+                    next_result = await update_timer_channel(channel, ttl, timer_type, effective_max_updates)
+                    logger.debug(f"Appel récursif réussi en mode eager: {next_result}")
+                    result.update(next_result)
+                except Exception as e:
+                    logger.error(f"Erreur lors de l'appel récursif en mode eager: {str(e)}")
+                    result["error"] = str(e)
+            else:
+                # En mode production, on planifie la prochaine mise à jour
+                logger.debug("Mode PRODUCTION: planification de la prochaine mise à jour")
+                update_timer_channel.apply_async(
+                    args=[channel, ttl, timer_type, effective_max_updates],
+                    countdown=1
+                )
+            
+            result["status"] = "success"
+            result["updates_left"] = effective_max_updates
+            
+        else:
+            if ttl <= 0:
+                logger.info(f"Timer expiré pour {channel} ({key})")
+                result["status"] = "expired"
+            else:
+                logger.info(f"Nombre maximum de mises à jour atteint pour {channel}")
+                result["status"] = "max_updates"
+            
+    except Exception as e:
+        logger.error(f"Erreur lors de la mise à jour du timer pour {channel}: {str(e)}")
+        logger.exception(e)
+        result["error"] = str(e)
+    finally:
+        if redis:
+            try:
+                await redis.aclose()
+                logger.debug(f"Connexion Redis fermée pour {channel}")
+            except Exception as e:
+                logger.error(f"Erreur lors de la fermeture de la connexion Redis: {str(e)}")
+    
+    return result 

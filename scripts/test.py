@@ -12,6 +12,7 @@ import subprocess
 import click
 from pathlib import Path
 import re
+import os
 
 @click.group()
 def cli():
@@ -22,8 +23,9 @@ def cli():
 @click.option('--cov/--no-cov', default=True, help='Active/désactive la couverture de code')
 @click.option('--html', is_flag=True, help='Génère un rapport HTML de couverture')
 @click.option('--logs', is_flag=True, help='Affiche les logs détaillés des tests')
+@click.option('--dev/--prod', default=True, help='Utilise l\'environnement de test isolé (dev) ou la stack en cours')
 @click.argument('test_path', required=False)
-def run(cov: bool, html: bool, logs: bool, test_path: str):
+def run(cov: bool, html: bool, logs: bool, dev: bool, test_path: str):
     """
     Exécute les tests.
     
@@ -31,10 +33,30 @@ def run(cov: bool, html: bool, logs: bool, test_path: str):
         cov: Active la couverture de code
         html: Génère un rapport HTML
         logs: Affiche les logs détaillés des tests
+        dev: Utilise l'environnement de test isolé si True, sinon utilise la stack en cours
         test_path: Chemin spécifique des tests à exécuter
     """
     cmd = ["pytest", "-v"]
     
+    # Configuration Redis selon l'environnement
+    if dev:
+        env = {
+            "REDIS_HOST": "localhost",
+            "REDIS_PORT": "6380",
+            "REDIS_DB": "1",
+            "API_URL": "http://localhost:8001",
+            **dict(os.environ)
+        }
+        print("Utilisation de l'environnement de test isolé (localhost:6380)")
+    else:
+        env = {
+            "REDIS_HOST": "localhost",
+            "REDIS_PORT": "6379",
+            "REDIS_DB": "0",
+            "API_URL": "http://localhost:8000",
+            **dict(os.environ)
+        }
+        print("Utilisation de la stack en cours (localhost:6379)")
     
     if logs:
         cmd.append("-s")
@@ -46,7 +68,7 @@ def run(cov: bool, html: bool, logs: bool, test_path: str):
     if test_path:
         cmd.append(test_path)
     
-    subprocess.run(cmd)
+    subprocess.run(cmd, env=env)
 
 def update_readme_with_output(output: str):
     try:
@@ -136,7 +158,7 @@ def docker(logs: bool, test_only: bool, update_docs: bool):
         else:
             cmd.append("--abort-on-container-exit")
             subprocess.run(cmd)
-
+@cli.command()
 def run_tests_in_docker():
     """Lance les tests dans l'environnement Docker."""
     cmd = "docker-compose -f docker-compose.test.yml up --build --force-recreate test"
@@ -160,6 +182,22 @@ def run_tests(args):
         cmd.append(args.test_path)
     
     result = subprocess.run(cmd)
+    return result.returncode
+
+@cli.command()
+def down():
+    """Arrête la stack de test Docker."""
+    cmd = [
+        "docker-compose",
+        "-f", "docker-compose.test.yml",
+        "down"
+    ]
+    print("Arrêt de la stack de test...")
+    result = subprocess.run(cmd)
+    if result.returncode == 0:
+        print("Stack de test arrêtée avec succès.")
+    else:
+        print("Erreur lors de l'arrêt de la stack de test.")
     return result.returncode
 
 if __name__ == '__main__':

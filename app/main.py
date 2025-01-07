@@ -25,9 +25,13 @@ async def lifespan(app: FastAPI):
     app.state.redis = redis
     app.state.queue_manager = QueueManager(redis)
     
+    # Démarrer le slot checker
+    await app.state.queue_manager.start_slot_checker(check_interval=0.1)
+    
     yield
     
     # Nettoyage
+    await app.state.queue_manager.stop_slot_checker()
     await redis.aclose()
 
 app = FastAPI(lifespan=lifespan)

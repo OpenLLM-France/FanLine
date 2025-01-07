@@ -5,45 +5,64 @@ import asyncio
 
 class TestQueueManager:
     @pytest.mark.asyncio
-    async def test_add_to_queue(self, queue_manager):
+    async def test_add_to_queue(self, queue_manager, test_logger):
         """Test l'ajout d'un utilisateur à la file d'attente."""
-        print("\n🔄 Test d'ajout à la file d'attente")
+        test_logger.info("Démarrage du test d'ajout à la file d'attente")
         
-        print("  ➡️  Ajout de user1 à la file")
-        position = await queue_manager.add_to_queue("user1")
-        assert position == 1, f"La première position devrait être 1, reçu {position}"
-        print("  ✅ Position 1 attribuée")
-        
-        # Vérification de la présence dans la file
-        print("  ➡️  Vérification de la présence dans la file")
-        waiting_list = await queue_manager.redis.lrange('waiting_queue', 0, -1)
-        assert "user1" in waiting_list, f"L'utilisateur devrait être dans la file d'attente. File actuelle : {waiting_list}"
-        print("  ✅ Utilisateur trouvé dans la file")
+        try:
+            test_logger.debug("Tentative d'ajout de user1 à la file")
+            position = await queue_manager.add_to_queue("user1")
+            test_logger.info(f"Position {position} attribuée avec succès")
+            assert position == 1, f"La première position devrait être 1, reçu {position}"
+            
+            # Vérification de la présence dans la file
+            test_logger.debug("Vérification de la présence dans la file")
+            waiting_list = await queue_manager.redis.lrange('waiting_queue', 0, -1)
+            assert "user1" in waiting_list, f"L'utilisateur devrait être dans la file d'attente. File actuelle : {waiting_list}"
+            test_logger.info("Utilisateur trouvé dans la file avec succès")
+            test_logger.debug(f"État actuel de la file d'attente : {waiting_list}")
+            
+        except Exception as e:
+            test_logger.error(f"Erreur lors du test d'ajout à la file: {str(e)}")
+            raise
 
     @pytest.mark.asyncio
-    async def test_draft_flow(self, queue_manager):
+    async def test_draft_flow(self, queue_manager, test_logger):
         """Test le flux complet du système de draft."""
-        print("\n🔄 Test du flux de draft")
+        test_logger.info("Démarrage du test du flux de draft")
         
-        # Ajout à la file
-        print("  ➡️  Ajout de user1 à la file")
-        await queue_manager.add_to_queue("user1")
-        print("  ✅ Utilisateur ajouté")
-        
-        # Offre d'un slot
-        print("  ➡️  Offre d'un slot à user1")
-        await queue_manager.offer_slot("user1")
-        is_draft = await queue_manager.redis.sismember('draft_users', "user1")
-        assert is_draft, "L'utilisateur devrait être en draft"
-        print("  ✅ Slot offert, utilisateur en draft")
-        
-        # Confirmation de connexion
-        print("  ➡️  Confirmation de la connexion")
-        success = await queue_manager.confirm_connection("user1")
-        assert success, "La confirmation devrait réussir"
-        is_active = await queue_manager.redis.sismember('active_users', "user1")
-        assert is_active, "L'utilisateur devrait être actif"
-        print("  ✅ Connexion confirmée, utilisateur actif")
+        try:
+            # Ajout à la file
+            test_logger.debug("Tentative d'ajout de user1 à la file")
+            position = await queue_manager.add_to_queue("user1")
+            test_logger.info(f"Utilisateur ajouté en position {position}")
+            
+            # Offre d'un slot
+            test_logger.debug("Tentative d'offre d'un slot à user1")
+            await queue_manager.offer_slot("user1")
+            is_draft = await queue_manager.redis.sismember('draft_users', "user1")
+            if not is_draft:
+                test_logger.error("L'utilisateur n'est pas en état de draft comme attendu")
+                raise AssertionError("L'utilisateur devrait être en draft")
+            test_logger.info("Slot offert avec succès, utilisateur en draft")
+            
+            # Confirmation de connexion
+            test_logger.debug("Tentative de confirmation de la connexion")
+            success = await queue_manager.confirm_connection("user1")
+            if not success:
+                test_logger.error("Échec de la confirmation de connexion")
+                raise AssertionError("La confirmation devrait réussir")
+                
+            is_active = await queue_manager.redis.sismember('active_users', "user1")
+            if not is_active:
+                test_logger.error("L'utilisateur n'est pas actif après confirmation")
+                raise AssertionError("L'utilisateur devrait être actif")
+            
+            test_logger.info("Test du flux de draft complété avec succès")
+            
+        except Exception as e:
+            test_logger.error(f"Erreur lors du test du flux de draft: {str(e)}")
+            raise
 
     @pytest.mark.asyncio
     async def test_draft_expiration(self, queue_manager):
@@ -138,7 +157,7 @@ class TestQueueManager:
         await queue_manager.redis.setex(f'session:{user_id}', 1, '1')
         await asyncio.sleep(1.1)  # Attendre l'expiration
         timers = await queue_manager.get_timers(user_id)
-        assert 'session' not in timers
+        assert timers == {}
         
         # Test des timers avec erreur Redis
         original_redis = queue_manager.redis
@@ -219,8 +238,8 @@ class TestQueueManager:
         
         # Vérifier les timers
         timers = await queue_manager.get_timers(user_id)
-        assert 'session' in timers
-        assert timers['session'] > 0 
+        assert timers["timer_type"] == "session"
+        assert timers["ttl"] > 0
 
 class MockRedis:
     def __init__(self):

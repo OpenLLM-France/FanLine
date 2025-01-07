@@ -15,6 +15,7 @@ celery = "^5.3.6"
 uvicorn = "^0.24.0"
 asyncio = "^3.4.3"
 click = "^8.1.7"
+pytest-timeout = "^2.3.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.3"
