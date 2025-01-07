@@ -1,7 +1,7 @@
-import type { UserRequest } from './types';
+import type { UserRequest } from './types.ts';
 
 // Base API URL
-const API_URL = 'http://localhost:8000'; // Replace with your actual API URL
+const API_URL = 'http://localhost:6379';
 
 // Join Queue
 export const joinQueue = async (userRequest: UserRequest): Promise<{ position: number }> => {
