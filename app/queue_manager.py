@@ -303,12 +303,14 @@ class QueueManager:
         
         is_draft = await self.redis.sismember('draft_users', user_id)
         if is_draft:
+            #@-> ADD POSITION DATA
             return {"status": "draft"}
         
         return None
 
     async def get_metrics(self) -> dict:
         """Obtient les métriques de la file d'attente."""
+        #@-> ADD draft information
         async with self.redis.pipeline(transaction=True) as pipe:
             await pipe.scard('active_users')
             await pipe.llen('waiting_queue')
@@ -321,25 +323,45 @@ class QueueManager:
         }
 
     async def get_timers(self, user_id: str) -> dict:
-        """Obtient les timers actifs d'un utilisateur."""
+        """Obtient les timers actifs et démarre la tâche de mise à jour"""
         try:
             timers = {}
             
+            # check session active
             is_active = await self.redis.sismember('active_users', user_id)
             if is_active:
                 session_ttl = await self.redis.ttl(f'session:{user_id}')
                 if session_ttl > 0:
-                    timers['session'] = session_ttl
+                    timers['session'] = {
+                        'ttl': session_ttl,
+                        'channel': f'timer:session:{user_id}'
+                    }
+                    # start update session timer
+                    update_timer_channel.delay(
+                        timers['session']['channel'], 
+                        session_ttl,
+                        'session'
+                    )
                     
+            # check draft active
             is_draft = await self.redis.sismember('draft_users', user_id)
             if is_draft:
                 draft_ttl = await self.redis.ttl(f'draft:{user_id}')
                 if draft_ttl > 0:
-                    timers['draft'] = draft_ttl
+                    timers['draft'] = {
+                        'ttl': draft_ttl,
+                        'channel': f'timer:draft:{user_id}'
+                    }
+                    # start update draft timer
+                    update_timer_channel.delay(
+                        timers['draft']['channel'], 
+                        draft_ttl,
+                        'draft'
+                    )
                     
             return timers
+            
         except Exception as e:
-            # Log l'erreur 
             print(f"Erreur lors de la récupération des timers: {str(e)}")
             return {}
 
@@ -370,3 +392,41 @@ async def cleanup_session(user_id: str):
     await redis.srem('active_users', user_id)
     await redis.delete(f'session:{user_id}')
     await redis.aclose() 
+
+@celery_app.task
+async def update_timer_channel(channel: str, initial_ttl: int, timer_type: str):
+    """Tâche Celery qui met à jour le timer sur un canal"""
+    redis = Redis(
+        host=os.getenv('REDIS_HOST', 'localhost'),
+        port=int(os.getenv('REDIS_PORT', 6379)),
+        db=int(os.getenv('REDIS_DB', 0)),
+        decode_responses=True
+    )
+    
+    try:
+        # check if subscribers listen to channel
+        subscribers = await redis.pubsub_numsub(channel)
+        if subscribers[0][1] == 0:  # if no one listen
+            return
+            
+        # publish timer update
+        await redis.publish(
+            channel,
+            json.dumps({
+                "type": "timer_update",
+                "timer_type": timer_type,  # draft or session
+                "ttl": initial_ttl
+            })
+        )
+        
+        # recursif  ttl-1
+        if initial_ttl > 0:
+            update_timer_channel.apply_async(
+                args=[channel, initial_ttl - 1, timer_type],
+                countdown=1
+            )
+            
+    except Exception as e:
+        print(f"Erreur dans la mise à jour du timer: {str(e)}")
+    finally:
+        await redis.aclose() 

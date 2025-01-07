@@ -1,0 +1,27 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/svelte": "^5.2.6",
+    "@types/testing-library__jest-dom": "^6.0.0",
+    "jsdom": "^25.0.1",
+    "svelte": "^5.16.5",
+    "vite": "^6.0.7",
+    "vitest": "3.0.0-beta.3"
+  },
+  "resolutions": {
+    "vite": "^6.0.7"
+  }
+}

@@ -114,7 +114,7 @@ class TestQueueManager:
             # Simuler une erreur lors de la vérification du statut draft
             success = await queue_manager.confirm_connection("error_confirm_user")
             print(f"✅ Résultat de la confirmation: {success}")
-            success = False  # Forcer l'échec car l'erreur Redis devrait empêcher la confirmation
+            success = False  # Forcer l'échec car l'erreur redis devrait empêcher la confirmation
         except Exception as e:
             print(f"❌ Erreur lors de la confirmation: {str(e)}")
             success = False
@@ -152,22 +152,22 @@ class TestQueueManager:
         """Test le cycle de vie du vérificateur de slots."""
         print("\n🔄 Test du cycle de vie du slot checker")
         
-        # Arrêter le checker existant
+        # stop le checker existant
         await queue_manager.stop_slot_checker()
         assert queue_manager._slot_check_task is None
         
-        # Démarrer un nouveau checker
+        # run un nouveau checker
         await queue_manager.start_slot_checker(check_interval=0.1)
         assert queue_manager._slot_check_task is not None
         
-        # Tenter de démarrer un second checker (ne devrait pas créer de nouvelle tâche)
+        # try rerun checker
         await queue_manager.start_slot_checker(check_interval=0.1)
         
-        # Arrêter le checker
+        # stop checker
         await queue_manager.stop_slot_checker()
         assert queue_manager._slot_check_task is None
         
-        # Tenter d'arrêter un checker déjà arrêté
+        # try restop checker
         await queue_manager.stop_slot_checker()
         assert queue_manager._slot_check_task is None
 
