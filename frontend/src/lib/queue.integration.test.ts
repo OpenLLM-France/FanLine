@@ -1,8 +1,32 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { joinQueue, getStatus } from './queue';
 import type { UserRequest } from './types';
+import fetch from 'node-fetch';
 
 const API_URL = 'http://localhost:8000';
+const MAX_RETRIES = 10;
+const RETRY_DELAY = 2000;  // 2 secondes
+const HOOK_TIMEOUT = 30000;  // 30 secondes
+
+async function wait(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function checkServerWithRetry(retries = MAX_RETRIES): Promise<boolean> {
+    try {
+        const response = await fetch(`${API_URL}/queue/metrics`);
+        console.log('Response status:', response.status);
+        return response.ok;
+    } catch (error) {
+        console.error('Erreur de connexion:', error);
+        if (retries > 0) {
+            console.log(`Tentative échouée, reste ${retries} essais...`);
+            await wait(RETRY_DELAY);
+            return checkServerWithRetry(retries - 1);
+        }
+        return false;
+    }
+}
 
 // Ces tests nécessitent que le serveur soit en marche sur http://localhost:8000
 describe('API Integration Tests', () => {
@@ -15,18 +39,14 @@ describe('API Integration Tests', () => {
         };
 
         beforeAll(async () => {
-            // Vérifier si le serveur est disponible
-            try {
-                const response = await fetch(`${API_URL}/queue/metrics`);
-                if (!response.ok) {
-                    throw new Error('Le serveur répond mais avec une erreur');
-                }
-            } catch (error) {
-                console.error(`❌ Le serveur n'est pas disponible sur ${API_URL}`);
+            // Vérifier si le serveur est disponible avec retry
+            const isServerAvailable = await checkServerWithRetry();
+            if (!isServerAvailable) {
+                console.error(`❌ Le serveur n'est pas disponible sur ${API_URL} après ${MAX_RETRIES} tentatives`);
                 console.error('Assurez-vous que le serveur est en marche avant de lancer les tests d\'intégration');
                 throw new Error('Le serveur n\'est pas disponible');
             }
-        });
+        }, HOOK_TIMEOUT);
 
         it('should complete a full queue cycle', async () => {
             // Rejoindre la file d'attente
@@ -37,8 +57,12 @@ describe('API Integration Tests', () => {
             // Vérifier le statut
             const status = await getStatus(userRequest.user_id);
             expect(status).toHaveProperty('status');
-            expect(status.status).toBe('waiting');
-            expect(status).toHaveProperty('position');
+            // L'utilisateur peut être en attente ou en draft selon la disponibilité des slots
+            expect(['waiting', 'draft']).toContain(status.status);
+            // La position n'est présente que si le statut est 'waiting'
+            if (status.status === 'waiting') {
+                expect(status).toHaveProperty('position');
+            }
         });
     });
 }); 

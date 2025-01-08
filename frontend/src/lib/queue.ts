@@ -1,4 +1,5 @@
 import type { UserRequest } from './types.ts';
+import fetch from 'node-fetch';
 
 // Types de réponse de l'API
 interface QueueStatus {
