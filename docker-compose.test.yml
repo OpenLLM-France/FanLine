@@ -7,9 +7,29 @@ services:
       - "6380:6379"
     networks:
       - test-network
-    command: redis-server --appendonly yes --save 1 1
+    command: redis-server --save "" --appendonly no
     volumes:
       - redis-test-data:/data
+
+  celery-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      - REDIS_HOST=redis-test
+      - REDIS_PORT=6379
+      - REDIS_DB=1
+      - PYTHONPATH=/app
+      - CELERY_BROKER_URL=redis://redis-test:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis-test:6379/1
+    depends_on:
+      - redis-test
+    networks:
+      - test-network
+    volumes:
+      - ./app:/app/app
+      - ./tests:/app/tests
+    command: poetry run python tests/run_celery_worker.py
 
   api:
     build:
@@ -26,6 +46,7 @@ services:
       - "8001:8000"
     depends_on:
       - redis-test
+      - celery-test
     networks:
       - test-network
     volumes:
@@ -45,15 +66,17 @@ services:
       - CELERY_BROKER_URL=redis://redis-test:6379/1
       - CELERY_RESULT_BACKEND=redis://redis-test:6379/1
       - API_URL=http://api:8000
+      - TEST_PATH=${TEST_PATH:-tests/}
     depends_on:
       - redis-test
       - api
+      - celery-test
     networks:
       - test-network
     volumes:
       - ./app:/app/app
       - ./tests:/app/tests
-    command: poetry run pytest -v --cov=app --cov-report=term-missing
+    command: sh -c 'poetry run pytest -v --cov=app --cov-report=term-missing ${TEST_PATH}'
 
 volumes:
   redis-test-data:

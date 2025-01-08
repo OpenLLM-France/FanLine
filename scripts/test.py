@@ -98,22 +98,17 @@ def update_readme_with_output(output: str):
 @click.option('--logs', is_flag=True, help='Affiche les logs détaillés des tests')
 @click.option('--test-only', is_flag=True, help='Affiche uniquement les logs des tests (pas de build/services)')
 @click.option('--update-docs', is_flag=True, help='Met à jour le README avec la sortie des tests')
-def docker(logs: bool, test_only: bool, update_docs: bool):
+@click.argument('test_path', required=False)
+def docker(logs: bool, test_only: bool, update_docs: bool, test_path: str):
     if test_only:
-        cmd = [
-            "docker-compose",
-            "-f", "docker-compose.test.yml",
-            "run",
-            "--rm",
-            "-T",
-            "test",
-            "poetry", "run", "pytest", "-v"
-        ]
+        cmd = "docker-compose -f docker-compose.test.yml run --rm -T test poetry run pytest -v --color=yes"
         if logs:
-            cmd.append("-s")
-        cmd.extend(["--cov=app", "--cov-report=term-missing"])
+            cmd += " -s"
+        cmd += " --cov=app --cov-report=term-missing"
+        if test_path:
+            cmd += f" {test_path}"
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         
         filtered_output = []
         for line in result.stdout.split('\n'):
@@ -129,35 +124,33 @@ def docker(logs: bool, test_only: bool, update_docs: bool):
         if result.returncode != 0:
             exit(result.returncode)
     else:
-        cmd = [
-            "docker-compose",
-            "-f", "docker-compose.test.yml",
-            "up",
-            "--build",
-        ]
-        
         if logs:
-            subprocess.run([
-                "docker-compose",
-                "-f", "docker-compose.test.yml",
-                "build",
-                "--no-cache",
-                "test"
-            ])
-            result = subprocess.run([
-                "docker-compose",
-                "-f", "docker-compose.test.yml",
-                "run",
-                "--rm",
-                "test",
-                "poetry", "run", "pytest", "-v", "-s", "--cov=app", "--cov-report=term-missing"
-            ], capture_output=True, text=True)
+            cmd = "docker-compose -f docker-compose.test.yml build --no-cache test"
+            subprocess.run(cmd, shell=True)
+            
+            cmd = "docker-compose -f docker-compose.test.yml run --rm test poetry run pytest -v -s --color=yes --cov=app --cov-report=term-missing"
+            if test_path:
+                cmd += f" {test_path}"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             
             if update_docs and result.returncode == 0:
                 update_readme_with_output(result.stdout)
         else:
-            cmd.append("--abort-on-container-exit")
-            subprocess.run(cmd)
+            # Démarrer les services nécessaires
+            services_cmd = "docker-compose -f docker-compose.test.yml up -d redis-test celery-test api"
+            subprocess.run(services_cmd, shell=True)
+            
+            # Exécuter le test spécifié ou tous les tests
+            test_cmd = "docker-compose -f docker-compose.test.yml run --rm test poetry run pytest -v --color=yes"
+            if test_path:
+                test_cmd += f" {test_path}"
+            test_cmd += " --cov=app --cov-report=term-missing"
+            subprocess.run(test_cmd, shell=True)
+            
+            # Arrêter les services
+            down_cmd = "docker-compose -f docker-compose.test.yml down"
+            subprocess.run(down_cmd, shell=True)
+
 @cli.command()
 def run_tests_in_docker():
     """Lance les tests dans l'environnement Docker."""
@@ -170,7 +163,7 @@ def run_tests_in_docker():
 
 def run_tests(args):
     """Lance les tests avec les options spécifiées."""
-    cmd = ["pytest", "-v", "-s"]
+    cmd = ["pytest", "-v", "-s", "--color=yes"]
     
     if args.cov:
         cmd.extend(["--cov=app", "--cov-report=term-missing"])

@@ -1,5 +1,6 @@
 import os
 from redis.asyncio import Redis
+from redis import Redis as SyncRedis
 from celery import Celery
 import json
 import asyncio
@@ -11,10 +12,15 @@ celery = Celery('queue_manager')
 
 logger = logging.getLogger('test_logger')
 
+# Récupération des variables d'environnement Redis
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+REDIS_DB = int(os.getenv('REDIS_DB', 0))
+
 # Configuration de base
 celery.conf.update(
-    broker_url='redis://localhost:6379/0',
-    result_backend='redis://localhost:6379/0',
+    broker_url=f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}',
+    result_backend=f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}',
     broker_connection_retry=False,
     broker_connection_max_retries=0,
     task_serializer='json',
@@ -498,108 +504,55 @@ async def cleanup_session(user_id: str):
         await redis.aclose()
         logger.debug(f"Connexion Redis fermée pour {user_id}")
 
-@celery.task
-async def update_timer_channel(channel: str, initial_ttl: int, timer_type: str, max_updates: int = 10):
-    """Met à jour le canal de timer pour un utilisateur de manière récursive."""
+@celery.task(name='app.queue_manager.update_timer_channel')
+def update_timer_channel(channel: str, initial_ttl: int, timer_type: str, max_updates: int = 3):
+    """Met à jour le canal de timer avec le TTL restant."""
     logger.info(f"Début de la tâche de mise à jour du timer pour {channel} (TTL initial: {initial_ttl})")
     
-    # Forcer le mode EAGER en test
-    if os.environ.get('TESTING') == 'true':
-        celery.conf.update(task_always_eager=True)
-    
-    logger.debug(f"Mode Celery actuel dans la tâche: EAGER={celery.conf.task_always_eager}")
-    
-    redis = None
-    result = {"status": "error", "ttl": initial_ttl, "updates_left": max_updates}
+    # Utiliser un client Redis synchrone avec les variables d'environnement
+    redis_client = SyncRedis(
+        host=os.getenv('REDIS_HOST', 'localhost'),
+        port=int(os.getenv('REDIS_PORT', 6379)),
+        db=int(os.getenv('REDIS_DB', 0)),
+        decode_responses=True
+    )
+    updates_left = max_updates
+    current_ttl = initial_ttl
     
     try:
-        redis = Redis(
-            host=os.getenv('REDIS_HOST', 'localhost'),
-            port=int(os.getenv('REDIS_PORT', 6379)),
-            db=int(os.getenv('REDIS_DB', 0)),
-            decode_responses=True
-        )
-        
-        # Extraire l'ID utilisateur et le type de timer de la clé
-        await asyncio.sleep(1)
-        user_id = channel.replace('timer:channel:', '')
-        key = f"{timer_type}:{user_id}"  # session:user_id ou draft:user_id
-        
-        # Vérifier que la clé existe et obtenir son TTL réel
-        ttl = await redis.ttl(key)
-        logger.debug(f"TTL actuel pour {key}: {ttl}")
-        if ttl <= 0:
-            logger.info(f"La clé {key} n'existe plus ou a expiré (TTL={ttl})")
-            result["status"] = "expired"
-            result["ttl"] = ttl
-            return result
+        while updates_left > 0 and current_ttl > 0:
+            # Vérifier le TTL de la clé
+            key = f"{timer_type}:{channel.split(':')[-1]}"
+            current_ttl = redis_client.ttl(key)
             
-        logger.debug(f"TTL réel pour {key}: {ttl}")
-        result["ttl"] = ttl
-        
-        # Vérifier si l'utilisateur est connecté
-        is_active = await redis.sismember('active_users', user_id)
-        is_draft = await redis.sismember('draft_users', user_id)
-        
-        # Ajuster max_updates en fonction de l'état
-        if timer_type == 'session' and not is_active:
-            logger.debug(f"Utilisateur {user_id} pas encore actif, pas de décompte des updates")
-            effective_max_updates = max_updates  # On ne décrémente pas
-        elif timer_type == 'draft' and not is_draft:
-            logger.debug(f"Utilisateur {user_id} pas encore en draft, pas de décompte des updates")
-            effective_max_updates = max_updates  # On ne décrémente pas
-        else:
-            effective_max_updates = max_updates - 1  # On décrémente normalement
-            
-        if ttl > 0 and max_updates > 0:
+            if current_ttl <= 0:
+                logger.info(f"La clé {key} n'existe plus ou a expiré (TTL={current_ttl})")
+                break
+                
             # Publier la mise à jour
             message = {
-                "ttl": ttl,
-                "timer_type": timer_type
+                'timer_type': timer_type,
+                'ttl': current_ttl,
+                'updates_left': updates_left
             }
-            await redis.publish(channel, json.dumps(message))
-            logger.debug(f"Timer publié pour {channel}: {message}")
+            redis_client.publish(channel, json.dumps(message))
+            logger.info(f"Mise à jour du timer pour {channel} (TTL: {current_ttl}, updates restantes: {updates_left})")
             
-            # En mode eager, on attend un peu et on rappelle directement
-            if celery.conf.task_always_eager:
-                logger.debug("Mode EAGER: exécution synchrone de la prochaine mise à jour")
-                await asyncio.sleep(0.1)  # Délai réduit en mode test
-                try:
-                    next_result = await update_timer_channel(channel, ttl, timer_type, effective_max_updates)
-                    logger.debug(f"Appel récursif réussi en mode eager: {next_result}")
-                    result.update(next_result)
-                except Exception as e:
-                    logger.error(f"Erreur lors de l'appel récursif en mode eager: {str(e)}")
-                    result["error"] = str(e)
-            else:
-                # En mode production, on planifie la prochaine mise à jour
-                logger.debug("Mode PRODUCTION: planification de la prochaine mise à jour")
-                update_timer_channel.apply_async(
-                    args=[channel, ttl, timer_type, effective_max_updates],
-                    countdown=1
-                )
-            
-            result["status"] = "success"
-            result["updates_left"] = effective_max_updates
-            
-        else:
-            if ttl <= 0:
-                logger.info(f"Timer expiré pour {channel} ({key})")
-                result["status"] = "expired"
-            else:
-                logger.info(f"Nombre maximum de mises à jour atteint pour {channel}")
-                result["status"] = "max_updates"
-            
+            updates_left -= 1
+            if updates_left > 0:
+                time.sleep(1)  # Attendre 1 seconde avant la prochaine mise à jour
+                
+        return {
+            'status': 'success',
+            'ttl': current_ttl,
+            'updates_left': updates_left
+        }
+        
     except Exception as e:
-        logger.error(f"Erreur lors de la mise à jour du timer pour {channel}: {str(e)}")
-        logger.exception(e)
-        result["error"] = str(e)
+        logger.error(f"Erreur lors de la mise à jour du timer: {str(e)}")
+        return {
+            'status': 'error',
+            'error': str(e)
+        }
     finally:
-        if redis:
-            try:
-                await redis.aclose()
-                logger.debug(f"Connexion Redis fermée pour {channel}")
-            except Exception as e:
-                logger.error(f"Erreur lors de la fermeture de la connexion Redis: {str(e)}")
-    
-    return result 
+        redis_client.close() 

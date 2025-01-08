@@ -1,0 +1,105 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Rapport de Tests - 2025-01-08 03:28:42</title>
+    <style>
+        body {
+            background-color: #2d2d2d;
+            margin: 0;
+            padding: 20px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .test-report {
+            background-color: #1e1e1e;
+            color: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin: 0 auto;
+            max-width: 1200px;
+        }
+        .test-report pre {
+            font-family: 'Consolas', 'Courier New', Courier, monospace;
+            white-space: pre-wrap;
+            margin: 0;
+        }
+        .header {
+            color: #ffffff;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #444;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-report">
+        <div class="header">
+            <h1>Rapport de Tests</h1>
+            <p>Généré le 2025-01-08 03:28:42</p>
+        </div>
+        <pre>[1m============================= test session starts ==============================[0m
+platform linux -- Python 3.13.1, pytest-7.4.4, pluggy-1.5.0 -- /usr/local/bin/python3.13
+cachedir: .pytest_cache
+rootdir: /app
+configfile: pyproject.toml
+testpaths: tests
+plugins: timeout-2.3.1, asyncio-0.21.2, anyio-3.7.1, cov-4.1.0
+asyncio: mode=Mode.AUTO
+[1mcollecting ... [0mcollected 32 items
+tests/test_api_endpoints.py::TestAPI::test_join_queue_flow [32mPASSED[0m[32m        [  3%][0m
+tests/test_api_endpoints.py::TestAPI::test_join_queue_flow_when_full [32mPASSED[0m[32m [  6%][0m
+tests/test_api_endpoints.py::TestAPI::test_leave_queue [32mPASSED[0m[32m            [  9%][0m
+tests/test_api_endpoints.py::TestAPI::test_get_status_nonexistent [32mPASSED[0m[32m [ 12%][0m
+tests/test_api_endpoints.py::TestAPI::test_heartbeat [32mPASSED[0m[32m              [ 15%][0m
+tests/test_api_endpoints.py::TestAPI::test_heartbeat_invalid [32mPASSED[0m[32m      [ 18%][0m
+tests/test_celery.py::test_celery_eager_mode [32mPASSED[0m[32m                      [ 21%][0m
+tests/test_celery.py::test_celery_task_chaining [32mPASSED[0m[32m                   [ 25%][0m
+tests/test_celery.py::test_celery_error_handling [32mPASSED[0m[32m                  [ 28%][0m
+tests/test_integration.py::TestIntegration::test_concurrent_users [32mPASSED[0m[32m [ 31%][0m
+tests/test_integration.py::TestIntegration::test_requeue_mechanism [32mPASSED[0m[32m [ 34%][0m
+tests/test_queue_manager.py::TestQueueManager::test_add_to_queue [32mPASSED[0m[32m  [ 37%][0m
+tests/test_queue_manager.py::TestQueueManager::test_draft_flow [32mPASSED[0m[32m    [ 40%][0m
+tests/test_queue_manager.py::TestQueueManager::test_draft_expiration [32mPASSED[0m[32m [ 43%][0m
+tests/test_queue_manager.py::TestQueueManager::test_error_handling [32mPASSED[0m[32m [ 46%][0m
+tests/test_queue_manager.py::TestQueueManager::test_timer_edge_cases [32mPASSED[0m[32m [ 50%][0m
+tests/test_queue_manager.py::TestQueueManager::test_slot_checker_lifecycle [32mPASSED[0m[32m [ 53%][0m
+tests/test_queue_manager.py::TestQueueManager::test_verify_queue_state_errors [32mPASSED[0m[32m [ 56%][0m
+tests/test_queue_manager.py::TestQueueManager::test_session_management [32mPASSED[0m[32m [ 59%][0m
+tests/test_timers.py::TestTimers::test_draft_timer_redis [32mPASSED[0m[32m          [ 62%][0m
+tests/test_timers.py::TestTimers::test_session_timer_redis [32mPASSED[0m[32m        [ 65%][0m
+tests/test_timers.py::TestTimers::test_get_timers_endpoint_draft [32mPASSED[0m[32m  [ 68%][0m
+tests/test_timers.py::TestTimers::test_get_timers_endpoint_session [32mPASSED[0m[32m [ 71%][0m
+tests/test_timers.py::TestTimers::test_get_timers_endpoint_both [32mPASSED[0m[32m   [ 75%][0m
+tests/test_timers.py::TestTimers::test_get_timers_endpoint_no_timers [32mPASSED[0m[32m [ 78%][0m
+tests/test_timers.py::TestTimers::test_pubsub_connection_draft [32mPASSED[0m[32m    [ 81%][0m
+tests/test_timers.py::TestTimers::test_pubsub_connection_session [32mPASSED[0m[32m  [ 84%][0m
+tests/test_timers.py::TestTimers::test_pubsub_multiple_updates [32mPASSED[0m[32m    [ 87%][0m
+tests/test_timers.py::test_update_timer_channel [32mPASSED[0m[32m                   [ 90%][0m
+tests/test_timers.py::test_update_timer_channel_expiration [32mPASSED[0m[33m        [ 93%][0m
+tests/test_timers_async.py::TestTimersAsync::test_pubsub_multiple_updates_async [32mPASSED[0m[33m [ 96%][0m
+tests/test_timers_async.py::TestTimersAsync::test_update_timer_channel_async [32mPASSED[0m[33m [100%][0m
+[33m=============================== warnings summary ===============================[0m
+tests/test_timers.py::test_update_timer_channel
+  /Users/chrysostomebeltran/Documents/GitHub/redis_queue/tests/test_timers.py:409: AlwaysEagerIgnored: task_always_eager has no effect on send_task
+tests/test_timers.py::test_update_timer_channel
+  /Users/chrysostomebeltran/Documents/GitHub/redis_queue/tests/test_timers.py:441: DeprecationWarning: Call to deprecated close. (Use aclose() instead) -- Deprecated since version 5.0.1.
+tests/test_timers.py::test_update_timer_channel_expiration
+  /Users/chrysostomebeltran/Documents/GitHub/redis_queue/tests/test_timers.py:464: AlwaysEagerIgnored: task_always_eager has no effect on send_task
+tests/test_timers.py::test_update_timer_channel_expiration
+  /Users/chrysostomebeltran/Documents/GitHub/redis_queue/tests/test_timers.py:499: DeprecationWarning: Call to deprecated close. (Use aclose() instead) -- Deprecated since version 5.0.1.
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+---------- coverage: platform linux, python 3.13.1-final-0 -----------
+Name                   Stmts   Miss  Cover   Missing
+----------------------------------------------------
+app/celery_app.py          6      6     0%   1-19
+app/main.py               61     12    80%   19-35, 48, 56, 64, 86-87
+app/queue_manager.py     304     87    71%   40-52, 87-88, 110-112, 114-116, 137-139, 165-166, 186, 190, 201-208, 228, 232-234, 238-246, 267, 277-283, 307, 318-320, 351-356, 397-400, 430-433, 454-481, 486-505, 529-530, 551-553
+----------------------------------------------------
+TOTAL                    371    105    72%
+[33m======================= [32m32 passed[0m, [33m[1m4 warnings[0m[33m in 35.06s[0m[33m ========================[0m
+</pre>
+    </div>
+</body>
+</html>

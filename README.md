@@ -77,6 +77,100 @@ Votre contenu ici (laissez une ligne vide après le summary)
 - Docker et Docker Compose
 - Poetry
 <details>
+<!-- REPORT TITLE -->
+<summary>🧪 Rapport de Tests - 2025-01-08 03:28:42 - 32/32 PASSED</summary>
+
+<!-- START_TEST_REPORT -->
+
+### 🧪 Rapport de Tests - 2025-01-08 03:28:42 - 32/32 PASSED
+
+<div class="test-report">
+    <style>
+        .test-report {
+            background-color: #1e1e1e;
+            color: #ffffff;
+            padding: 16px;
+            border-radius: 8px;
+            font-family: 'Courier New', Courier, monospace;
+            white-space: pre-wrap;
+        }
+        .test-report .green { color: #4CAF50; }
+        .test-report .red { color: #f44336; }
+        .test-report .yellow { color: #ffeb3b; }
+        .test-report .blue { color: #2196F3; }
+        .test-report .bold { font-weight: bold; }
+        .test-report .underline { text-decoration: underline; }
+    </style>
+    <span class="bold">============================= test session starts ==============================</span>
+platform linux -- Python 3.13.1, pytest-7.4.4, pluggy-1.5.0 -- /usr/local/bin/python3.13
+cachedir: .pytest_cache
+rootdir: /app
+configfile: pyproject.toml
+testpaths: tests
+plugins: timeout-2.3.1, asyncio-0.21.2, anyio-3.7.1, cov-4.1.0
+asyncio: mode=Mode.AUTO
+<span class="bold">collecting ... </span>collected 32 items
+tests/test_api_endpoints.py::TestAPI::test_join_queue_flow <span class="green"><span class="green">PASSED</span></span><span class="green">        [  3%]</span>
+tests/test_api_endpoints.py::TestAPI::test_join_queue_flow_when_full <span class="green"><span class="green">PASSED</span></span><span class="green"> [  6%]</span>
+tests/test_api_endpoints.py::TestAPI::test_leave_queue <span class="green"><span class="green">PASSED</span></span><span class="green">            [  9%]</span>
+tests/test_api_endpoints.py::TestAPI::test_get_status_nonexistent <span class="green"><span class="green">PASSED</span></span><span class="green"> [ 12%]</span>
+tests/test_api_endpoints.py::TestAPI::test_heartbeat <span class="green"><span class="green">PASSED</span></span><span class="green">              [ 15%]</span>
+tests/test_api_endpoints.py::TestAPI::test_heartbeat_invalid <span class="green"><span class="green">PASSED</span></span><span class="green">      [ 18%]</span>
+tests/test_celery.py::test_celery_eager_mode <span class="green"><span class="green">PASSED</span></span><span class="green">                      [ 21%]</span>
+tests/test_celery.py::test_celery_task_chaining <span class="green"><span class="green">PASSED</span></span><span class="green">                   [ 25%]</span>
+tests/test_celery.py::test_celery_error_handling <span class="green"><span class="green">PASSED</span></span><span class="green">                  [ 28%]</span>
+tests/test_integration.py::TestIntegration::test_concurrent_users <span class="green"><span class="green">PASSED</span></span><span class="green"> [ 31%]</span>
+tests/test_integration.py::TestIntegration::test_requeue_mechanism <span class="green"><span class="green">PASSED</span></span><span class="green"> [ 34%]</span>
+tests/test_queue_manager.py::TestQueueManager::test_add_to_queue <span class="green"><span class="green">PASSED</span></span><span class="green">  [ 37%]</span>
+tests/test_queue_manager.py::TestQueueManager::test_draft_flow <span class="green"><span class="green">PASSED</span></span><span class="green">    [ 40%]</span>
+tests/test_queue_manager.py::TestQueueManager::test_draft_expiration <span class="green"><span class="green">PASSED</span></span><span class="green"> [ 43%]</span>
+tests/test_queue_manager.py::TestQueueManager::test_error_handling <span class="green"><span class="green">PASSED</span></span><span class="green"> [ 46%]</span>
+tests/test_queue_manager.py::TestQueueManager::test_timer_edge_cases <span class="green"><span class="green">PASSED</span></span><span class="green"> [ 50%]</span>
+tests/test_queue_manager.py::TestQueueManager::test_slot_checker_lifecycle <span class="green"><span class="green">PASSED</span></span><span class="green"> [ 53%]</span>
+tests/test_queue_manager.py::TestQueueManager::test_verify_queue_state_errors <span class="green"><span class="green">PASSED</span></span><span class="green"> [ 56%]</span>
+tests/test_queue_manager.py::TestQueueManager::test_session_management <span class="green"><span class="green">PASSED</span></span><span class="green"> [ 59%]</span>
+tests/test_timers.py::TestTimers::test_draft_timer_redis <span class="green"><span class="green">PASSED</span></span><span class="green">          [ 62%]</span>
+tests/test_timers.py::TestTimers::test_session_timer_redis <span class="green"><span class="green">PASSED</span></span><span class="green">        [ 65%]</span>
+tests/test_timers.py::TestTimers::test_get_timers_endpoint_draft <span class="green"><span class="green">PASSED</span></span><span class="green">  [ 68%]</span>
+tests/test_timers.py::TestTimers::test_get_timers_endpoint_session <span class="green"><span class="green">PASSED</span></span><span class="green"> [ 71%]</span>
+tests/test_timers.py::TestTimers::test_get_timers_endpoint_both <span class="green"><span class="green">PASSED</span></span><span class="green">   [ 75%]</span>
+tests/test_timers.py::TestTimers::test_get_timers_endpoint_no_timers <span class="green"><span class="green">PASSED</span></span><span class="green"> [ 78%]</span>
+tests/test_timers.py::TestTimers::test_pubsub_connection_draft <span class="green"><span class="green">PASSED</span></span><span class="green">    [ 81%]</span>
+tests/test_timers.py::TestTimers::test_pubsub_connection_session <span class="green"><span class="green">PASSED</span></span><span class="green">  [ 84%]</span>
+tests/test_timers.py::TestTimers::test_pubsub_multiple_updates <span class="green"><span class="green">PASSED</span></span><span class="green">    [ 87%]</span>
+tests/test_timers.py::test_update_timer_channel <span class="green"><span class="green">PASSED</span></span><span class="green">                   [ 90%]</span>
+tests/test_timers.py::test_update_timer_channel_expiration <span class="green"><span class="green">PASSED</span></span><span class="yellow">        [ 93%]</span>
+tests/test_timers_async.py::TestTimersAsync::test_pubsub_multiple_updates_async <span class="green"><span class="green">PASSED</span></span><span class="yellow"> [ 96%]</span>
+tests/test_timers_async.py::TestTimersAsync::test_update_timer_channel_async <span class="green"><span class="green">PASSED</span></span><span class="yellow"> [100%]</span>
+<span class="yellow">=============================== <span class="yellow">warnings summary</span> ===============================</span>
+tests/test_timers.py::test_update_timer_channel
+  /Users/chrysostomebeltran/Documents/GitHub/redis_queue/tests/test_timers.py:409: AlwaysEagerIgnored: task_always_eager has no effect on send_task
+tests/test_timers.py::test_update_timer_channel
+  /Users/chrysostomebeltran/Documents/GitHub/redis_queue/tests/test_timers.py:441: DeprecationWarning: Call to deprecated close. (Use aclose() instead) -- Deprecated since version 5.0.1.
+tests/test_timers.py::test_update_timer_channel_expiration
+  /Users/chrysostomebeltran/Documents/GitHub/redis_queue/tests/test_timers.py:464: AlwaysEagerIgnored: task_always_eager has no effect on send_task
+tests/test_timers.py::test_update_timer_channel_expiration
+  /Users/chrysostomebeltran/Documents/GitHub/redis_queue/tests/test_timers.py:499: DeprecationWarning: Call to deprecated close. (Use aclose() instead) -- Deprecated since version 5.0.1.
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+---------- coverage: platform linux, python 3.13.1-final-0 -----------
+Name                   Stmts   Miss  Cover   Missing
+----------------------------------------------------
+app/celery_app.py          6      6     0%   1-19
+app/main.py               61     12    80%   19-35, 48, 56, 64, 86-87
+app/queue_manager.py     304     87    71%   40-52, 87-88, 110-112, 114-116, 137-139, 165-166, 186, 190, 201-208, 228, 232-234, 238-246, 267, 277-283, 307, 318-320, 351-356, 397-400, 430-433, 454-481, 486-505, 529-530, 551-553
+----------------------------------------------------
+TOTAL                    371    105    72%
+<span class="yellow">======================= <span class="green">32 passed</span>, <span class="yellow"><span class="bold">4 warnings</span><span class="yellow"> in 35.06s</span><span class="yellow"> ========================</span>
+
+</div>
+
+<!-- END_TEST_REPORT -->
+
+
+</details>
+
+
+<details>
 <summary><h3>📊 Schémas de la file d'attente</h3></summary>
 
 <div align="left" style="margin-left: 20px; border-left: 2px solid #3eaf7c; padding: 10px;">
