@@ -92,4 +92,5 @@ web_modules/
 .pnp.*
 
 
-tests/__pycache__
+**/__pycache__/
+
