@@ -24,7 +24,7 @@ Lucie est déployée via une interface basée sur open web-ui, permettant au pub
 
 <details>
 <!-- REPORT TITLE -->
-<summary>🧪 Rapport de Tests - 2025-01-08 03:28:42 - 32/32 PASSED</summary>
+<summary><h2>🧪 Rapport de Tests - 2025-01-08 03:28:42 - 32/32 PASSED</h2></summary>
 
 <!-- START_TEST_REPORT -->
 
