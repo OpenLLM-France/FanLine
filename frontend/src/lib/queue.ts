@@ -1,24 +1,55 @@
 import type { UserRequest } from './types.ts';
 
+// Types de réponse de l'API
+interface QueueStatus {
+    status: 'waiting' | 'draft' | 'connected';
+    position?: number;
+}
+
+interface QueueMetrics {
+    active_users: number;
+    waiting_users: number;
+    total_slots: number;
+}
+
+interface TimerInfo {
+    ttl: number;
+    channel: string;
+    timer_type: 'session' | 'draft';
+}
+
 // Base API URL
-const API_URL = 'http://localhost:6379';
+const API_URL = 'http://localhost:8000';
+
+// Fonction utilitaire pour gérer les erreurs de fetch
+const handleFetchError = (error: unknown) => {
+    if (error instanceof TypeError && error.message === 'Failed to fetch') {
+        throw new Error('Le serveur n\'est pas disponible');
+    }
+    throw error;
+};
 
 // Join Queue
 export const joinQueue = async (userRequest: UserRequest): Promise<{ position: number }> => {
-    const response = await fetch(`${API_URL}/queue/join`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(userRequest),
-    });
+    try {
+        const response = await fetch(`${API_URL}/queue/join`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(userRequest),
+        });
 
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail);
+        }
+
+        return await response.json();
+    } catch (error) {
+        handleFetchError(error);
+        throw error; // Si ce n'est pas une erreur de fetch, on la propage
     }
-
-    return await response.json();
 };
 
 // Leave Queue
@@ -58,7 +89,7 @@ export const confirmConnection = async (userRequest: UserRequest): Promise<{ ses
 };
 
 // Get Status
-export const getStatus = async (userId: string): Promise<any> => {
+export const getStatus = async (userId: string): Promise<QueueStatus> => {
     const response = await fetch(`${API_URL}/queue/status/${userId}`, {
         method: 'GET',
     });
@@ -90,7 +121,7 @@ export const heartbeat = async (userRequest: UserRequest): Promise<{ success: bo
 };
 
 // Get Metrics
-export const getMetrics = async (): Promise<any> => {
+export const getMetrics = async (): Promise<QueueMetrics> => {
     const response = await fetch(`${API_URL}/queue/metrics`, {
         method: 'GET',
     });
@@ -104,7 +135,7 @@ export const getMetrics = async (): Promise<any> => {
 };
 
 // Get Timers
-export const getTimers = async (userId: string): Promise<any> => {
+export const getTimers = async (userId: string): Promise<TimerInfo> => {
     const response = await fetch(`${API_URL}/queue/timers/${userId}`, {
         method: 'GET',
     });

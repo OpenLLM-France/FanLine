@@ -1,31 +1,22 @@
-import { flushSync } from 'svelte';
 import { expect, test } from 'vitest';
 import { multiplier } from './multiplier';
+import { render, screen, fireEvent } from '@testing-library/svelte';
+import Counter from './Counter.svelte';
 
-/* 
-npx sv create frontend-2
-cd frontend-2
-npm install
-npm install -D vitest
+test('Counter fonctionne correctement', async () => {
+    const { getByRole } = render(Counter);
+    const button = getByRole('button');
+    
+    expect(button.textContent?.trim() ?? '').toBe('0');
+    
+    await fireEvent.click(button);
+    expect(button.textContent?.trim() ?? '').toBe('1');
+});
 
-vite.config.ts
-import { defineConfig } from 'vite'; -> import { defineConfig } from 'vitest/config';
-
-	resolve: process.env.VITEST
-		? {
-			conditions: ['browser']
-		}
-		: undefined
-*/
-
-// npm run test
-// https://svelte.dev/docs/svelte/testing
 test('Multiplier', () => {
-	let value = multiplier(0, 2);
+    let value = multiplier(0, 2);
+    expect(value).toEqual(0);
 
-	expect(value).toEqual(0);
-
-	value = multiplier(5, 5);
-
-	expect(value).toEqual(25);
+    value = multiplier(5, 5);
+    expect(value).toEqual(25);
 });
