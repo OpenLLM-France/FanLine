@@ -213,5 +213,60 @@ def report(insert):
             generate_html_report(test_output, timestamp)
             print("Rapports générés avec succès dans test_report.html et README.md")
 
+@cli.command()
+@click.argument('test_path', required=False)
+@click.option('--insert', is_flag=True, help='Insère le dernier rapport sans relancer les tests')
+def update_doc(test_path, insert):
+    """Met à jour le README avec les résultats des tests."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    if insert:
+        try:
+            # Lire le dernier rapport depuis test_report.html
+            with open('test_report.html', 'r', encoding='utf-8') as f:
+                content = f.read()
+                # Extraire le contenu du <pre>
+                match = re.search(r'<pre>(.*?)</pre>', content, re.DOTALL)
+                if match:
+                    test_output = match.group(1)
+                    update_readme_with_report(test_output, timestamp)
+                    print("Documentation mise à jour avec succès depuis le dernier rapport")
+                    
+                    # Afficher un résumé
+                    passed, total = extract_test_results(test_output)
+                    if passed is not None:
+                        print(f"\nRésumé des tests : {passed}/{total} tests passés")
+                else:
+                    print("Impossible de trouver la sortie des tests dans test_report.html")
+        except FileNotFoundError:
+            print("Fichier test_report.html non trouvé")
+    else:
+        # Construire la commande de test
+        command = ["python", "scripts/test.py", "docker", "--test-only"]
+        if test_path:
+            command.append(test_path)
+        
+        try:
+            # Exécuter les tests
+            result = subprocess.run(command, capture_output=True, text=True)
+            
+            if result.stdout:
+                # Mettre à jour le README avec les résultats
+                update_readme_with_report(result.stdout, timestamp)
+                # Sauvegarder aussi le rapport HTML
+                generate_html_report(result.stdout, timestamp)
+                print("Documentation mise à jour avec succès")
+                
+                # Afficher un résumé
+                passed, total = extract_test_results(result.stdout)
+                if passed is not None:
+                    print(f"\nRésumé des tests : {passed}/{total} tests passés")
+            else:
+                print("Aucune sortie de test à traiter")
+                
+        except Exception as e:
+            print(f"Erreur lors de la mise à jour de la documentation : {str(e)}")
+            return False
+
 if __name__ == "__main__":
     cli()

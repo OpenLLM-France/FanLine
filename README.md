@@ -306,33 +306,13 @@ test run [--cov] [--html] [test_path]
 test docker [--logs] [--test-only]
 ```
 
-#### Exemples de sortie
+#### Mise à jour de la documentation des tests
+```bash
+# Exécuter les tests et mettre à jour le README
+test update-doc [test_path]
 
-1. **Mode test-only**
-```
-============================= test session starts ==============================
-platform linux -- Python 3.9.19, pytest-7.4.4, pluggy-1.5.0
-rootdir: /app
-plugins: asyncio-0.21.2, anyio-3.7.1, cov-4.1.0
-collected 7 items
-
-tests/test_api_endpoints.py::TestAPI::test_join_queue_flow_with_available_slots PASSED
-tests/test_api_endpoints.py::TestAPI::test_join_queue_flow_when_full PASSED
-tests/test_integration.py::TestIntegration::test_concurrent_users PASSED
-tests/test_integration.py::TestIntegration::test_requeue_mechanism PASSED
-tests/test_queue_manager.py::TestQueueManager::test_add_to_queue PASSED
-tests/test_queue_manager.py::TestQueueManager::test_draft_flow PASSED
-tests/test_queue_manager.py::TestQueueManager::test_draft_expiration PASSED
-
----------- coverage: platform linux, python 3.9.19-final-0 -----------
-Name                   Stmts   Miss  Cover
-------------------------------------------
-app/main.py               30      5    83%
-app/queue_manager.py      82      8    90%
-------------------------------------------
-TOTAL                    112     13    88%
-
-============================== 7 passed in 0.40s ==============================
+# Mettre à jour le README avec le dernier rapport sans relancer les tests
+test update-doc --insert
 ```
 
 #### Options de test
@@ -342,6 +322,7 @@ TOTAL                    112     13    88%
 | `--test-only` | Affiche uniquement les résultats des tests (sans logs Docker) |
 | `--cov` | Active la couverture de code |
 | `--html` | Génère un rapport HTML de couverture |
+| `--insert` | Met à jour le README avec le dernier rapport sans relancer les tests |
 
 ### Script de formatage (`poetry run format`)
 #### option de formatage
