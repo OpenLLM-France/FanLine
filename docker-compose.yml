@@ -34,6 +34,7 @@ services:
       - queue-network
     volumes:
       - ./app:/app/app
+    command: poetry run celery -A app.queue_manager worker --loglevel=info
 
   redis:
     image: redis:alpine

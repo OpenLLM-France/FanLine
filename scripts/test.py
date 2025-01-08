@@ -23,7 +23,7 @@ def cli():
 @click.option('--cov/--no-cov', default=True, help='Active/désactive la couverture de code')
 @click.option('--html', is_flag=True, help='Génère un rapport HTML de couverture')
 @click.option('--logs', is_flag=True, help='Affiche les logs détaillés des tests')
-@click.option('--dev/--prod', default=True, help='Utilise l\'environnement de test isolé (dev) ou la stack en cours')
+@click.option('--dev/--prod', default=False, help='Utilise l\'environnement de test isolé (dev) ou la stack en cours')
 @click.argument('test_path', required=False)
 def run(cov: bool, html: bool, logs: bool, dev: bool, test_path: str):
     """

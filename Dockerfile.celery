@@ -12,8 +12,4 @@ WORKDIR /app
 COPY pyproject.toml poetry.lock ./
 
 RUN poetry config virtualenvs.create false
-RUN poetry install --without dev --no-interaction --no-ansi --no-root
-
-
-
-CMD ["poetry", "run", "celery", "-A", "app.queue_manager.celery_app", "worker", "--loglevel=info"] 
+RUN poetry install --without dev --no-interaction --no-ansi --no-root 
