@@ -32,6 +32,8 @@ services:
       - redis
     networks:
       - queue-network
+    volumes:
+      - ./app:/app/app
 
   redis:
     image: redis:alpine
@@ -53,4 +55,5 @@ volumes:
 
 networks:
   queue-network:
-    driver: bridge 
+    driver: bridge
+
