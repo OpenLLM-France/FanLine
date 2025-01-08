@@ -56,28 +56,28 @@ def update_readme_with_report(test_output, timestamp):
         # Convertir les codes ANSI en HTML avec classes CSS
         formatted_output = convert_ansi_to_html(test_output)
         
-        # Créer le contenu au format Markdown avec le style intégré
+        # Créer le contenu au format Markdown avec styles inline
         markdown_content = f"""
 ### 🧪 Rapport de Tests - {timestamp} - {test_summary}
 
-<div class="test-report">
-    <style>
-        .test-report {{
-            background-color: #1e1e1e;
-            color: #ffffff;
-            padding: 16px;
-            border-radius: 8px;
-            font-family: 'Courier New', Courier, monospace;
-            white-space: pre-wrap;
-        }}
-        .test-report .green {{ color: #4CAF50; }}
-        .test-report .red {{ color: #f44336; }}
-        .test-report .yellow {{ color: #ffeb3b; }}
-        .test-report .blue {{ color: #2196F3; }}
-        .test-report .bold {{ font-weight: bold; }}
-        .test-report .underline {{ text-decoration: underline; }}
-    </style>
-    {formatted_output}
+<div style="background-color: #1e1e1e; color: #ffffff; padding: 16px; border-radius: 8px; font-family: 'Courier New', Courier, monospace; white-space: pre-wrap;">
+
+<div style="font-family: monospace;">
+{formatted_output.replace(
+    '<span class="green">', '<span style="color: #4CAF50;">'
+).replace(
+    '<span class="red">', '<span style="color: #f44336;">'
+).replace(
+    '<span class="yellow">', '<span style="color: #ffeb3b;">'
+).replace(
+    '<span class="blue">', '<span style="color: #2196F3;">'
+).replace(
+    '<span class="bold">', '<span style="font-weight: bold;">'
+).replace(
+    '<span class="underline">', '<span style="text-decoration: underline;">'
+)}
+</div>
+
 </div>
 """
         

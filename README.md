@@ -21,61 +21,7 @@ Lucie est déployée via une interface basée sur open web-ui, permettant au pub
 - Mécanisme de file d'attente transparent avec notifications en temps réel
 - Intégration seamless avec l'interface open web-ui
 
-### Dernier build -TEST- :
 
-<details>
-<summary>Cliquez pour déplier/replier</summary>
-
-#### TEST RESULT
-
-1. **Mode test-only **
-```
-{output}
-```
-Votre contenu ici (laissez une ligne vide après le summary)
-- Point 1
-- Point 2
-- Point 3
-
-</details>
-
-## Table des matières
-- 1. [Introduction](#introduction)
--   - [1.1. Le Contexte](#le-contexte)  
--   - [1.2. Pourquoi un système de file d'attente ?](#pourquoi-un-système-de-file-dattente)
--   - [1.3. Les Caractéristiques](#les-caractéristiques)
-- 2. [Fonctionnalités](#fonctionnalités)
-- 3. [Architecture](#architecture)
--   - [3.1. Prérequis](#prérequis)
--   - [3.2. Installation](#installation)
--   - [3.3. Configuration](#configuration)
-- 4. [Installation](#installation)
-- 5. [Configuration](#configuration)
-- 6. [Utilisation](#utilisation)
-- 7. [Scripts CLI](#scripts-cli)
-- 8. [Tests](#tests)
-- 9. [Structure du Projet](#structure-du-projet)
-- 10. [API Reference](#api-reference)
-- 11. [Glossaire](#glossaire)
-
-## Fonctionnalités
-- 🔄 File d'attente en temps réel
-- 👥 Gestion de 50 utilisateurs simultanés
-- ⏲️ Sessions de 20 minutes
-- 🎟️ Système de réservation temporaire (draft)
-- 📊 Métriques en temps réel
-- 🔔 Notifications via Redis Pub/Sub
-
-# Architecture
-- **FastAPI** : APIrest et Websocket
-- **Redis** : Cache et pub/sub
-- **Celery** : Gestion des tâches asynchrones
-- **Docker** : Service management
-
-### Prérequis
-- Python 3.12+
-- Docker et Docker Compose
-- Poetry
 <details>
 <!-- REPORT TITLE -->
 <summary>🧪 Rapport de Tests - 2025-01-08 03:28:42 - 32/32 PASSED</summary>
@@ -168,6 +114,48 @@ TOTAL                    371    105    72%
 
 
 </details>
+
+
+
+
+## Table des matières
+- 1. [Introduction](#introduction)
+-   - [1.1. Le Contexte](#le-contexte)  
+-   - [1.2. Pourquoi un système de file d'attente ?](#pourquoi-un-système-de-file-dattente)
+-   - [1.3. Les Caractéristiques](#les-caractéristiques)
+- 2. [Fonctionnalités](#fonctionnalités)
+- 3. [Architecture](#architecture)
+-   - [3.1. Prérequis](#prérequis)
+-   - [3.2. Installation](#installation)
+-   - [3.3. Configuration](#configuration)
+- 4. [Installation](#installation)
+- 5. [Configuration](#configuration)
+- 6. [Utilisation](#utilisation)
+- 7. [Scripts CLI](#scripts-cli)
+- 8. [Tests](#tests)
+- 9. [Structure du Projet](#structure-du-projet)
+- 10. [API Reference](#api-reference)
+- 11. [Glossaire](#glossaire)
+
+## Fonctionnalités
+- 🔄 File d'attente en temps réel
+- 👥 Gestion de 50 utilisateurs simultanés
+- ⏲️ Sessions de 20 minutes
+- 🎟️ Système de réservation temporaire (draft)
+- 📊 Métriques en temps réel
+- 🔔 Notifications via Redis Pub/Sub
+
+# Architecture
+- **FastAPI** : APIrest et Websocket
+- **Redis** : Cache et pub/sub
+- **Celery** : Gestion des tâches asynchrones
+- **Docker** : Service management
+
+### Prérequis
+- Python 3.12+
+- Docker et Docker Compose
+- Poetry
+
 
 
 <details>
