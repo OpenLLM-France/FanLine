@@ -2,50 +2,78 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: Debug Tests",
-            "type": "python",
+            "name": "Debug Tests file",
+            "type": "debugpy",
             "request": "launch",
             "module": "pytest",
             "args": [
-                "tests/test_api_endpoints.py",
                 "-v",
+                "--log-cli-level=DEBUG",
+                "${file}",
                 "-s"
             ],
             "env": {
+                "TESTING": "true",
                 "PYTHONPATH": "${workspaceFolder}",
                 "REDIS_HOST": "localhost",
                 "REDIS_PORT": "6379",
-                "REDIS_DB": "1"
+                "REDIS_DB": "0",
+                "CELERY_BROKER_URL": "redis://localhost:6379/0",
+                "CELERY_RESULT_BACKEND": "redis://localhost:6379/0"
             },
             "console": "integratedTerminal",
             "justMyCode": false,
             "purpose": ["debug-test"]
         },
         {
-            "name": "Python: Debug FastAPI",
-            "type": "python",
+            "name": "Debug Tests",
+            "type": "debugpy",
             "request": "launch",
-            "module": "uvicorn",
+            "module": "pytest",
             "args": [
-                "app.main:app",
-                "--reload",
-                "--port",
-                "8000"
+                "-v",
+                "--log-cli-level=DEBUG",
+                "tests/",
+                "-s"
             ],
             "env": {
+                "TESTING": "true",
                 "PYTHONPATH": "${workspaceFolder}",
                 "REDIS_HOST": "localhost",
                 "REDIS_PORT": "6379",
-                "REDIS_DB": "0"
+                "REDIS_DB": "0",
+                "CELERY_BROKER_URL": "redis://localhost:6379/0",
+                "CELERY_RESULT_BACKEND": "redis://localhost:6379/0"
             },
             "console": "integratedTerminal",
+            "justMyCode": false,
+            "purpose": ["debug-test"]
+        },
+        {
+            "name": "Debug API Container",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5678
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}",
+                    "remoteRoot": "/app"
+                }
+            ],
             "justMyCode": false
         }
     ],
     "compounds": [
         {
             "name": "Debug All",
-            "configurations": ["Python: Debug FastAPI", "Python: Debug Tests"]
+            "configurations": ["Debug API Container", "Debug Tests"]
+        },
+        {
+            "name": "Debug All file",
+            "configurations": ["Debug API Container", "Debug Tests file"]
         }
     ]
 } 

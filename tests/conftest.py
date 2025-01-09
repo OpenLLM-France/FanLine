@@ -11,59 +11,50 @@ import atexit
 import asyncio
 import weakref
 
-# Configuration du logging pour les tests
-def setup_test_logging():
-    logger = logging.getLogger('test_logger')
-    logger.setLevel(logging.DEBUG)
-    logger.propagate = True
-    
-    # Supprimer les handlers existants de manière sécurisée
-    handlers = logger.handlers[:]
-    for handler in handlers:
-        try:
-            handler.flush()
-            handler.close()
-        except Exception:
-            pass
-        if handler in logger.handlers:
-            logger.removeHandler(handler)
-    
-    # Handler pour la console avec buffer
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+def pytest_addoption(parser):
+    """Ajoute des options personnalisées pour le débogage."""
+    parser.addoption(
+        "--debug-user",
+        action="store",
+        default="test_user",
+        help="ID de l'utilisateur pour les tests de débogage"
     )
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-    
-    # Handler pour le fichier avec buffer
-    log_file = 'tests/test.log'
-    file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8', delay=True)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    
-    # Stocker les handlers dans un attribut du logger pour le nettoyage
-    logger._test_handlers = [console_handler, file_handler]
-    
-    return logger
+    parser.addoption(
+        "--debug-mode",
+        action="store_true",
+        default=False,
+        help="Active le mode débogage détaillé"
+    )
+    parser.addoption(
+        "--redis-debug",
+        action="store_true",
+        default=False,
+        help="Active le débogage des opérations Redis"
+    )
 
-@pytest.fixture(scope="session")
+@pytest.fixture
+def debug_config(request):
+    """Fixture pour la configuration de débogage."""
+    return {
+        "user_id": request.config.getoption("--debug-user"),
+        "debug_mode": request.config.getoption("--debug-mode"),
+        "redis_debug": request.config.getoption("--redis-debug")
+    }
+
+@pytest.fixture
 def test_logger():
-    logger = setup_test_logging()
-    yield logger
-    # Nettoyage sécurisé après les tests
-    if hasattr(logger, '_test_handlers'):
-        for handler in logger._test_handlers:
-            try:
-                handler.flush()
-                handler.close()
-            except Exception:
-                pass
-            if handler in logger.handlers:
-                logger.removeHandler(handler)
+    """Configure le logger pour les tests."""
+    logger = logging.getLogger('test_logger')
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG if os.environ.get('PYTEST_DEBUG') else logging.INFO)
+    return logger
 
 # Définir la variable d'environnement TESTING
 os.environ['TESTING'] = 'true'
@@ -92,7 +83,22 @@ def celery_config():
     return config
 
 @pytest.fixture(scope="session")
-def celery_app(celery_config, test_logger):
+def celery_logger():
+    """Configure le logger pour les tests Celery."""
+    logger = logging.getLogger('celery_test_logger')
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG if os.environ.get('PYTEST_DEBUG') else logging.INFO)
+    return logger
+
+@pytest.fixture(scope="session")
+def celery_app(celery_config, celery_logger):
     from app.queue_manager import celery as app
     
     # Forcer la configuration
@@ -109,29 +115,7 @@ def celery_app(celery_config, test_logger):
         task_ignore_result=False
     )
     
-    # Vérification du mode eager
-    test_logger.info(f"Mode Celery configuré dans fixture - task_always_eager: {app.conf.task_always_eager}")
-    
-    # Handlers de tâches pour le logging
-    from celery.signals import task_prerun, task_postrun, task_failure
-    
-    @task_prerun.connect
-    def task_prerun_handler(task_id, task, *args, **kwargs):
-        test_logger.info(f"Démarrage de la tâche Celery: {task.name} (ID: {task_id})")
-        test_logger.debug(f"Arguments de la tâche: args={args}, kwargs={kwargs}")
-        test_logger.debug(f"Mode eager actuel: {app.conf.task_always_eager}")
-
-    @task_postrun.connect
-    def task_postrun_handler(task_id, task, retval, state, *args, **kwargs):
-        test_logger.info(f"Fin de la tâche Celery: {task.name} (ID: {task_id})")
-        test_logger.debug(f"État final: {state}, Résultat: {retval}")
-
-    @task_failure.connect
-    def task_failure_handler(task_id, exception, traceback, *args, **kwargs):
-        test_logger.error(f"Échec de la tâche Celery (ID: {task_id})")
-        test_logger.error(f"Exception: {exception}")
-        test_logger.debug(f"Traceback: {traceback}")
-
+    celery_logger.info("Configuration Celery appliquée")
     return app
 
 @pytest.fixture

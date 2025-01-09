@@ -12,10 +12,12 @@ python = "^3.9"
 fastapi = "^0.104.1"
 redis = "^5.0.1"
 celery = "^5.3.6"
-uvicorn = "^0.24.0"
+uvicorn = {extras = ["standard"], version = "^0.24.0"}
 asyncio = "^3.4.3"
 click = "^8.1.7"
 pytest-timeout = "^2.3.1"
+websockets = "^12.0"
+debugpy = "^1.8.11"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.3"
@@ -25,14 +27,13 @@ httpx = "^0.25.1"
 black = "^23.11.0"
 isort = "^5.12.0"
 flake8 = "^6.1.0"
-debugpy = "^1.8.11"
 
 [tool.poetry.scripts]
 dev = "scripts.dev:cli"
 test = "scripts.test:cli"
 format = "scripts.format:cli"
 readme = "scripts.update_readme:cli"
-
+docs = "scripts.update_docs:cli"
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"

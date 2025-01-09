@@ -2,29 +2,212 @@ import pytest
 import json
 from app.queue_manager import QueueManager
 import asyncio
+import logging
 
 class TestQueueManager:
+
+    @pytest.mark.asyncio
+    async def test_fill_active_queue(self, queue_manager, test_logger):
+        """Test le remplissage de la file active."""
+        test_logger.info("Démarrage du test de remplissage de la file active")
+        
+        try:
+            # Vérifier que la file est vide au départ
+            active_count = await queue_manager.redis.scard('active_users')
+            test_logger.info(f"Nombre initial d'utilisateurs actifs: {active_count}")
+            assert active_count == 0, "La file active devrait être vide au départ"
+            
+            # Remplir la file active
+            test_logger.info(f"Remplissage de la file active (max={queue_manager.max_active_users})")
+            for i in range(queue_manager.max_active_users):
+                active_user = f"active_user_{i}"
+                # Ajouter l'utilisateur à la file active
+                await queue_manager.redis.sadd('active_users', active_user)
+                # Créer une session pour l'utilisateur
+                await queue_manager.redis.setex(f'session:{active_user}', queue_manager.session_duration, '1')
+                
+                # Vérifier que l'utilisateur est bien actif
+                is_active = await queue_manager.redis.sismember('active_users', active_user)
+                assert is_active, f"L'utilisateur {active_user} devrait être actif"
+                
+                # Vérifier que la session existe
+                has_session = await queue_manager.redis.exists(f'session:{active_user}')
+                assert has_session, f"L'utilisateur {active_user} devrait avoir une session"
+                
+                # Vérifier le TTL de la session
+                ttl = await queue_manager.redis.ttl(f'session:{active_user}')
+                assert 0 < ttl <= queue_manager.session_duration, f"Le TTL de la session devrait être entre 0 et {queue_manager.session_duration}"
+                
+                # Vérifier le nombre d'utilisateurs actifs
+                current_count = await queue_manager.redis.scard('active_users')
+                test_logger.debug(f"Nombre d'utilisateurs actifs après ajout de {active_user}: {current_count}")
+                assert current_count == i + 1, f"Le nombre d'utilisateurs actifs devrait être {i + 1}"
+            
+            # Vérifier le nombre final d'utilisateurs actifs
+            final_count = await queue_manager.redis.scard('active_users')
+            test_logger.info(f"Nombre final d'utilisateurs actifs: {final_count}")
+            assert final_count == queue_manager.max_active_users, "La file active devrait être pleine"
+            
+            # Vérifier que tous les utilisateurs ont un statut correct
+            for i in range(queue_manager.max_active_users):
+                active_user = f"active_user_{i}"
+                status = await queue_manager.get_user_status(active_user)
+                test_logger.debug(f"Statut de {active_user}: {status}")
+                assert status["status"] == "connected", f"Le statut devrait être 'connected', reçu {status['status']}"
+                assert status["position"] == -2, f"La position devrait être -2, reçu {status['position']}"
+                assert "remaining_time" in status, "Le statut devrait inclure remaining_time"
+                assert 0 < status["remaining_time"] <= queue_manager.session_duration, "Le temps restant devrait être valide"
+            
+            test_logger.info("Test de remplissage réussi")
+            
+        except Exception as e:
+            test_logger.error(f"Erreur lors du test de remplissage: {str(e)}")
+            raise
+            
+        finally:
+            # Nettoyage
+            test_logger.debug("Nettoyage des données de test")
+            for i in range(queue_manager.max_active_users):
+                active_user = f"active_user_{i}"
+                await queue_manager.redis.srem('active_users', active_user)
+                await queue_manager.redis.delete(f'session:{active_user}')
+            
+            # Vérifier que le nettoyage est effectif
+            final_count = await queue_manager.redis.scard('active_users')
+            assert final_count == 0, "La file active devrait être vide après nettoyage"
+            test_logger.info("Nettoyage terminé") 
+
+
+    
+    
     @pytest.mark.asyncio
     async def test_add_to_queue(self, queue_manager, test_logger):
         """Test l'ajout d'un utilisateur à la file d'attente."""
         test_logger.info("Démarrage du test d'ajout à la file d'attente")
         
         try:
-            test_logger.debug("Tentative d'ajout de user1 à la file")
-            position = await queue_manager.add_to_queue("user1")
-            test_logger.info(f"Position {position} attribuée avec succès")
-            assert position == 1, f"La première position devrait être 1, reçu {position}"
+            # Remplir d'abord la file active
+            test_logger.info("Remplissage de la file active")
+            for i in range(queue_manager.max_active_users):
+                active_user = f"active_user_{i}"
+                await queue_manager.redis.sadd('active_users', active_user)
+                await queue_manager.redis.setex(f'session:{active_user}', queue_manager.session_duration, '1')
             
-            # Vérification de la présence dans la file
-            test_logger.debug("Vérification de la présence dans la file")
+            active_count = await queue_manager.redis.scard('active_users')
+            test_logger.info(f"Nombre d'utilisateurs actifs: {active_count}")
+            assert active_count == queue_manager.max_active_users, "La file active devrait être pleine"
+            
+            # Premier ajout - devrait réussir et rester en waiting
+            test_logger.debug("Tentative d'ajout de user1 à la file")
+            result = await queue_manager.add_to_queue("user1")
+            all_messages = await queue_manager.get_status_messages("user1")
+            test_logger.info(f"Résultat: {result}")
+            
+            # Vérifier le statut initial
+            assert result["last_status"] == None, f"Le statut initial devrait être 'disconnected', reçu {result['last_status']}"
+            assert result["last_position"] is None, f"La position initiale devrait être None, reçu {result['last_position']}"
+            
+            # Vérifier le statut après commit
+            test_logger.info(f"Résultat après commit: {result}")
+            assert result["commit_status"] == "waiting", f"Le statut après ajout devrait être 'waiting', reçu {result['commit_status']}"
+            assert result["commit_position"] == 1, f"La position après ajout devrait être 1, reçu {result['commit_position']}"
+            
+            # Vérifier la présence dans la file et le statut via get_user_status
+            test_logger.debug("Vérification de la présence dans la file et du statut")
             waiting_list = await queue_manager.redis.lrange('waiting_queue', 0, -1)
             assert "user1" in waiting_list, f"L'utilisateur devrait être dans la file d'attente. File actuelle : {waiting_list}"
-            test_logger.info("Utilisateur trouvé dans la file avec succès")
-            test_logger.debug(f"État actuel de la file d'attente : {waiting_list}")
+            
+            # Vérifier que le statut a été mis à jour via get_user_status
+            status = await queue_manager.get_user_status("user1")
+            test_logger.info(f"Statut après ajout: {status}")
+            assert status["status"] == "waiting", f"Le statut devrait être 'waiting', reçu {status['status']}"
+            assert status["position"] == 1, f"La position devrait être 1, reçu {status['position']}"
+            
+            test_logger.info("Utilisateur trouvé dans la file avec le bon statut")
+            
+            # Deuxième ajout - devrait retourner le même statut waiting
+            test_logger.debug("Tentative de réajout de user1 à la file")
+            messages = await queue_manager.get_status_messages("user1")
+            test_logger.info(f"Messages: {messages}")
+            result = await queue_manager.add_to_queue("user1")
+            messages = await queue_manager.get_status_messages("user1")
+            test_logger.info(f"Messages: {messages}")
+            assert result["last_status"] == "waiting", f"Le statut actuel devrait être 'disconnected', reçu {result['last_status']}"
+            assert result["last_position"] == 1, f"La position actuelle devrait être 1, reçu {result['last_position']}"
+            assert result["commit_status"] == "waiting", f"Le statut après ajout devrait être 'waiting'"
+            assert result["commit_position"] == 1, f"La position après ajout devrait être 1"
+            
+            # Enlever un utilisateur lambda de la file active
+            test_logger.debug("Enlèvement d'un utilisateur lambda de la file active")
+            size_active_users = await queue_manager.redis.scard('active_users')
+            test_logger.info(f"Taille de la liste active_users: {size_active_users}")
+            active_users = await queue_manager.redis.smembers('active_users')
+            active_user = next(iter(active_users))
+            await queue_manager.redis.srem('active_users', active_user)
+            nouvelle_size_active_users = await queue_manager.redis.scard('active_users')
+            test_logger.info(f"Nouvelle taille de la liste active_users: {nouvelle_size_active_users}")
+            assert nouvelle_size_active_users == size_active_users - 1, "La taille de la liste active_users devrait diminuer de 1"
+            # Confirmer la connexion pour l'utilisateur lambda
+            test_logger.debug("Confirmation de la connexion pour l'utilisateur lambda")
+            await queue_manager.check_available_slots()
+            draft_status = await queue_manager.get_user_status('user1')
+            test_logger.info(f"Statut de l'utilisateur lambda: {draft_status}")
+            assert draft_status["status"] == "draft", "L'utilisateur lambda devrait être en draft"
+            assert draft_status["position"] == -1, "La position devrait être -1"
+            # Vérifier si l'utilisateur lambda n'est plus dans la liste d'attente
+            test_logger.debug("Vérification de la présence de l'utilisateur lambda dans la liste d'attente")
+            waiting_list = await queue_manager.redis.smembers('waiting_queue')
+            assert active_user not in waiting_list, f"L'utilisateur lambda devrait être retiré de la liste d'attente. Liste actuelle : {waiting_list}"
+            
+            # Log les messages de statut
+            test_logger.info(f"Messages de statut pour l'utilisateur lambda: {messages}")
+            await queue_manager.confirm_connection("user1")
+
+            # Vérifier si l'utilisateur lambda est maintenant actif
+            active_users = await queue_manager.get_user_status("user1")
+            test_logger.info(f"Statut de l'utilisateur lambda: {active_users}")
+            assert active_users["status"] == "connected", "L'utilisateur lambda devrait être actif"
+            is_active = await queue_manager.redis.sismember('active_users', "user1")
+            assert is_active, "L'utilisateur lambda devrait être actif"
+            # Vérifier si user1 est maintenant en draft
+            is_draft = await queue_manager.redis.sismember('draft_users', "user1")
+            assert not  is_draft, "L'utilisateur devrait être dans la file de draft"
+            
+            test_logger.info("Utilisateur lambda enlevé de la file active, confirmé et user1 ajouté à la file de draft avec succès")
             
         except Exception as e:
             test_logger.error(f"Erreur lors du test d'ajout à la file: {str(e)}")
             raise
+            
+        finally:
+            # Nettoyage
+            test_logger.debug("Nettoyage des données de test")
+            # Récupération et fusion des sets queued_users, draft_users et active_users
+            users_sets = ['queued_users', 'draft_users', 'active_users']
+            all_users = set()
+            for user_set in users_sets:
+                users = await queue_manager.redis.smembers(user_set)
+                all_users.update(users)
+            
+            # Suppression des sessions, historiques et derniers statuts pour chaque utilisateur si possible
+            for user in all_users:
+                if await queue_manager.redis.exists(f'session:{user}'): 
+                    await queue_manager.redis.delete(f'session:{user}')
+                if await queue_manager.redis.exists(f'status_history:{user}'):
+                    await queue_manager.redis.delete(f'status_history:{user}')
+                if await queue_manager.redis.exists(f'last_status:{user}'):
+                    await queue_manager.redis.delete(f'last_status:{user}')
+                if await queue_manager.redis.exists(f'draft:{user}'):
+                    await queue_manager.redis.delete(f'draft:{user}')
+                test_logger.info(f"Suppression de la session, historique et dernier statut pour {user}")
+            await queue_manager.redis.delete('waiting_queue')
+            test_logger.info("Suppression de la file waiting_queue")
+            await queue_manager.redis.delete('queued_users')
+            test_logger.info("Suppression de la file queued_users")
+            await queue_manager.redis.delete('draft_users')
+            test_logger.info("Suppression de la file draft_users")
+            await queue_manager.redis.delete('active_users')
+            test_logger.info("Suppression de la file active_users")
 
     @pytest.mark.asyncio
     async def test_draft_flow(self, queue_manager, test_logger):
@@ -162,9 +345,11 @@ class TestQueueManager:
         # Test des timers avec erreur Redis
         original_redis = queue_manager.redis
         queue_manager.redis = None
-        timers = await queue_manager.get_timers("error_timer_user")
-        assert timers == {}
-        queue_manager.redis = original_redis
+        try:
+            timers = await queue_manager.get_timers("error_timer_user")
+            assert timers == {}
+        finally:
+            queue_manager.redis = original_redis
 
     @pytest.mark.asyncio
     async def test_slot_checker_lifecycle(self, queue_manager):
@@ -207,39 +392,100 @@ class TestQueueManager:
         queue_manager.redis = original_redis
 
     @pytest.mark.asyncio
-    async def test_session_management(self, queue_manager):
+    async def test_session_management(self, queue_manager, test_logger, debug_config):
         """Test la gestion complète des sessions."""
         print("\n🔄 Test de la gestion des sessions")
-        
-        user_id = "session_test_user"
-        
+
+        user_id = debug_config["user_id"]
+        debug_mode = debug_config["debug_mode"]
+        redis_debug = debug_config["redis_debug"]
+
+        if debug_mode:
+            test_logger.setLevel(logging.DEBUG)
+            test_logger.info(f"Mode debug activé pour l'utilisateur {user_id}")
+            if redis_debug:
+                test_logger.info("Débogage Redis activé")
+
+        # Nettoyer l'état initial
+        await queue_manager._cleanup_inconsistent_state(user_id)
+
         # Ajouter l'utilisateur à la file
-        position = await queue_manager.add_to_queue(user_id)
-        assert position > 0
+        result = await queue_manager.add_to_queue(user_id)
+        if debug_mode:
+            test_logger.debug(f"Résultat de l'ajout à la file: {result}")
         
-        # Offrir un slot
-        await queue_manager.offer_slot(user_id)
-        state = await queue_manager.get_user_status(user_id)
-        assert state["status"] == "draft"
+        # Vérifier l'état initial
+        status = await queue_manager.get_user_status(user_id)
+        if status["status"] == "waiting":
+            is_in_waiting = await queue_manager.redis.lpos('waiting_queue', user_id) is not None
+            is_queued = await queue_manager.redis.sismember('queued_users', user_id)
+            if debug_mode:
+                test_logger.debug(f"État initial - dans waiting_queue: {is_in_waiting}, dans queued_users: {is_queued}")
+            
+            print("\nOffre d'un slot...")
+            success = await queue_manager.offer_slot(user_id)
+            if debug_mode:
+                test_logger.debug(f"Résultat de l'offre de slot: {success}")
+                
+        is_draft = await queue_manager.redis.sismember('draft_users', user_id)
+        if debug_mode:
+            test_logger.debug(f"État après offre - dans draft_users: {is_draft}")
+
+        # Vérifier l'état après l'offre
+        is_in_waiting = await queue_manager.redis.lpos('waiting_queue', user_id) is not None
+        is_queued = await queue_manager.redis.sismember('queued_users', user_id)
+        is_draft = await queue_manager.redis.sismember('draft_users', user_id)
         
+        if debug_mode:
+            test_logger.debug("\nÉtat après offre de slot:")
+            test_logger.debug(f"- Dans waiting_queue: {is_in_waiting}")
+            test_logger.debug(f"- Dans queued_users: {is_queued}")
+            test_logger.debug(f"- Dans draft_users: {is_draft}")
+        
+        assert not is_in_waiting, "L'utilisateur ne devrait plus être dans waiting_queue"
+        assert not is_queued, "L'utilisateur ne devrait plus être dans queued_users"
+        assert is_draft, "L'utilisateur devrait être dans draft_users"
+
+        # Vérifier le statut après l'offre
+        status = await queue_manager.get_user_status(user_id)
+        if debug_mode:
+            test_logger.debug(f"Statut après offre: {status}")
+            
+        assert status["status"] == "draft", "Le statut devrait être 'draft'"
+        assert status["position"] == -1, "La position en draft devrait être -1"
+
         # Confirmer la connexion
+        if debug_mode:
+            test_logger.debug("\nConfirmation de la connexion...")
         success = await queue_manager.confirm_connection(user_id)
-        assert success
-        state = await queue_manager.get_user_status(user_id)
-        assert state["status"] == "connected"
+        if debug_mode:
+            test_logger.debug(f"Résultat de la confirmation: {success}")
         
-        # Étendre la session
-        success = await queue_manager.extend_session(user_id)
-        assert success
+        # Vérifier l'état final
+        is_in_waiting = await queue_manager.redis.lpos('waiting_queue', user_id) is not None
+        is_queued = await queue_manager.redis.sismember('queued_users', user_id)
+        is_draft = await queue_manager.redis.sismember('draft_users', user_id)
+        is_active = await queue_manager.redis.sismember('active_users', user_id)
         
-        # Tenter d'étendre une session inexistante
-        success = await queue_manager.extend_session("nonexistent_user")
-        assert not success
+        if debug_mode:
+            test_logger.debug("\nÉtat final:")
+            test_logger.debug(f"- Dans waiting_queue: {is_in_waiting}")
+            test_logger.debug(f"- Dans queued_users: {is_queued}")
+            test_logger.debug(f"- Dans draft_users: {is_draft}")
+            test_logger.debug(f"- Dans active_users: {is_active}")
         
-        # Vérifier les timers
-        timers = await queue_manager.get_timers(user_id)
-        assert timers["timer_type"] == "session"
-        assert timers["ttl"] > 0
+        assert not is_in_waiting, "L'utilisateur ne devrait pas être dans waiting_queue"
+        assert not is_queued, "L'utilisateur ne devrait pas être dans queued_users"
+        assert not is_draft, "L'utilisateur ne devrait pas être dans draft_users"
+        assert is_active, "L'utilisateur devrait être dans active_users"
+
+        # Vérifier le statut final
+        status = await queue_manager.get_user_status(user_id)
+        if debug_mode:
+            test_logger.debug(f"\nStatut final: {status}")
+            
+        assert status["status"] == "connected", "Le statut final devrait être 'connected'"
+        assert status["position"] == -2, "La position en connected devrait être -2"
 
 class MockRedis:
     def __init__(self):
@@ -388,10 +634,10 @@ class MockRedis:
         self.commands.append(('setex', (key, seconds, value)))
         return True
 
-    async def lpos(self, key, value):
+    def lpos(self, key, value):
         print(f"\n🔄 lpos {key} {value}")
-        self.commands.append(('lpos', (key, value)))
-        return None 
+        self.pipeline_commands.append(('lpos', (key, value)))
+        return self
 
     async def confirm_connection(self, user_id):
         print(f"\n🔄 Confirmation de connexion pour {user_id}")

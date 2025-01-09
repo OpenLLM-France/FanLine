@@ -1,0 +1,1 @@
+const multiplier = (a: number, b: number) => { return a * b }
