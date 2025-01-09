@@ -96,7 +96,7 @@ class TestAPI:
             logger.debug(f"Join full queue response: {response.json()}")
             assert response.status_code == 200
             data = response.json()
-            assert data["position"] > 0
+            assert data["commit_position"] > 0
             
             # Vérifier le statut après avoir rejoint
             response = await test_client.get(f"/queue/status/{users[-1]}")
@@ -214,7 +214,7 @@ class TestAPI:
             response = await test_client.get(f"/queue/timers/{user_id}")
             assert response.status_code == 200
             initial_timers = response.json()
-            assert initial_timers["timer_type"] is None, f"Aucun timer ne devrait être actif en waiting, reçu: {initial_timers}"
+            assert initial_timers == {}, f"Aucun timer ne devrait être actif en waiting, reçu: {initial_timers}"
             test_logger.info("Vérification des timers initiaux OK")
             
             # Libérer un slot et offrir le slot à l'utilisateur
