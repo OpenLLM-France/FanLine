@@ -38,6 +38,8 @@
 		"vitest": "^2.1.8"
 	},
 	"dependencies": {
-		"node-fetch": "^2.7.0"
+		"@types/redis": "^4.0.10",
+		"node-fetch": "^2.7.0",
+		"redis": "^4.7.0"
 	}
 }
