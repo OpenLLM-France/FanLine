@@ -1,5 +1,5 @@
 import type { UserRequest } from './types.ts';
-import fetch from 'node-fetch';
+import customFetch from './fetch';
 
 // Types de réponse de l'API
 interface QueueStatus {
@@ -20,10 +20,11 @@ interface TimerInfo {
 }
 
 // Base API URL
-const API_URL = 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // Fonction utilitaire pour gérer les erreurs de fetch
 const handleFetchError = (error: unknown) => {
+    console.error('Erreur détaillée:', error);
     if (error instanceof TypeError && error.message === 'Failed to fetch') {
         throw new Error('Le serveur n\'est pas disponible');
     }
@@ -33,7 +34,8 @@ const handleFetchError = (error: unknown) => {
 // Join Queue
 export const joinQueue = async (userRequest: UserRequest): Promise<{ position: number }> => {
     try {
-        const response = await fetch(`${API_URL}/queue/join`, {
+        console.log('Tentative de joinQueue avec:', userRequest);
+        const response = await customFetch(`${API_URL}/queue/join`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -41,21 +43,26 @@ export const joinQueue = async (userRequest: UserRequest): Promise<{ position: n
             body: JSON.stringify(userRequest),
         });
 
+        console.log('Réponse joinQueue:', response.status);
         if (!response.ok) {
             const error = await response.json();
+            console.error('Erreur joinQueue:', error);
             throw new Error(error.detail);
         }
 
-        return await response.json();
+        const data = await response.json();
+        console.log('Données joinQueue:', data);
+        return data;
     } catch (error) {
+        console.error('Exception joinQueue:', error);
         handleFetchError(error);
-        throw error; // Si ce n'est pas une erreur de fetch, on la propage
+        throw error;
     }
 };
 
 // Leave Queue
 export const leaveQueue = async (userRequest: UserRequest): Promise<{ success: boolean }> => {
-    const response = await fetch(`${API_URL}/queue/leave`, {
+    const response = await customFetch(`${API_URL}/queue/leave`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -73,7 +80,7 @@ export const leaveQueue = async (userRequest: UserRequest): Promise<{ success: b
 
 // Confirm Connection
 export const confirmConnection = async (userRequest: UserRequest): Promise<{ session_duration: number }> => {
-    const response = await fetch(`${API_URL}/queue/confirm`, {
+    const response = await customFetch(`${API_URL}/queue/confirm`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -91,21 +98,32 @@ export const confirmConnection = async (userRequest: UserRequest): Promise<{ ses
 
 // Get Status
 export const getStatus = async (userId: string): Promise<QueueStatus> => {
-    const response = await fetch(`${API_URL}/queue/status/${userId}`, {
-        method: 'GET',
-    });
+    try {
+        console.log('Tentative de getStatus pour:', userId);
+        const response = await customFetch(`${API_URL}/queue/status/${userId}`, {
+            method: 'GET',
+        });
 
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail);
+        console.log('Réponse getStatus:', response.status);
+        if (!response.ok) {
+            const error = await response.json();
+            console.error('Erreur getStatus:', error);
+            throw new Error(error.detail);
+        }
+
+        const data = await response.json();
+        console.log('Données getStatus:', data);
+        return data;
+    } catch (error) {
+        console.error('Exception getStatus:', error);
+        handleFetchError(error);
+        throw error;
     }
-
-    return await response.json();
 };
 
 // Heartbeat
 export const heartbeat = async (userRequest: UserRequest): Promise<{ success: boolean }> => {
-    const response = await fetch(`${API_URL}/queue/heartbeat`, {
+    const response = await customFetch(`${API_URL}/queue/heartbeat`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -123,7 +141,7 @@ export const heartbeat = async (userRequest: UserRequest): Promise<{ success: bo
 
 // Get Metrics
 export const getMetrics = async (): Promise<QueueMetrics> => {
-    const response = await fetch(`${API_URL}/queue/metrics`, {
+    const response = await customFetch(`${API_URL}/queue/metrics`, {
         method: 'GET',
     });
 
@@ -137,7 +155,7 @@ export const getMetrics = async (): Promise<QueueMetrics> => {
 
 // Get Timers
 export const getTimers = async (userId: string): Promise<TimerInfo> => {
-    const response = await fetch(`${API_URL}/queue/timers/${userId}`, {
+    const response = await customFetch(`${API_URL}/queue/timers/${userId}`, {
         method: 'GET',
     });
 

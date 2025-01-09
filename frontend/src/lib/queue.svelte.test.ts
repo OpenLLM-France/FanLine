@@ -3,16 +3,16 @@ import { joinQueue, leaveQueue, confirmConnection, getStatus, heartbeat, getMetr
 import type { UserRequest } from './types';
 import type { Response } from 'node-fetch';
 
-// Mock node-fetch
-vi.mock('node-fetch', () => {
+// Mock notre fetch personnalisé
+vi.mock('./fetch', () => {
 	return {
 		default: vi.fn()
 	};
 });
 
 // Import le mock après la configuration
-import fetch from 'node-fetch';
-const mockedFetch = fetch as unknown as jest.Mock;
+import customFetch from './fetch';
+const mockedFetch = customFetch as unknown as jest.Mock;
 
 describe('API functions', () => {
 	const userRequest: UserRequest = { user_id: '12345' };
