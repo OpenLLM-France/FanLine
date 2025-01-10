@@ -118,7 +118,12 @@ describe('API functions', () => {
 	it('should get user status', async () => {
 		mockedFetch.mockResolvedValue({
 			ok: true,
-			json: async () => ({ status: 'waiting', position: 2 }),
+			json: async () => ({
+				status: 'waiting',
+				position: 2,
+				remaining_time: 300,
+				estimated_wait_time: 600
+			}),
 		} as Response);
 
 		const result = await getStatus('12345');
@@ -127,7 +132,12 @@ describe('API functions', () => {
 			`${API_URL}/queue/status/12345`,
 			expect.objectContaining({ method: 'GET' })
 		);
-		expect(result).toEqual({ status: 'waiting', position: 2 });
+		expect(result).toEqual({
+			status: 'waiting',
+			position: 2,
+			remaining_time: 300,
+			estimated_wait_time: 600
+		});
 	});
 
 	it('should throw error when getting status fails', async () => {
@@ -165,7 +175,13 @@ describe('API functions', () => {
 	it('should get queue metrics', async () => {
 		mockedFetch.mockResolvedValue({
 			ok: true,
-			json: async () => ({ active_users: 10, queue_length: 5 }),
+			json: async () => ({
+				active_users: 10,
+				waiting_users: 5,
+				total_slots: 20,
+				average_wait_time: 300,
+				average_session_time: 600
+			}),
 		} as Response);
 
 		const result = await getMetrics();
@@ -174,13 +190,23 @@ describe('API functions', () => {
 			`${API_URL}/queue/metrics`,
 			expect.objectContaining({ method: 'GET' })
 		);
-		expect(result).toEqual({ active_users: 10, queue_length: 5 });
+		expect(result).toEqual({
+			active_users: 10,
+			waiting_users: 5,
+			total_slots: 20,
+			average_wait_time: 300,
+			average_session_time: 600
+		});
 	});
 
 	it('should get user timers', async () => {
 		mockedFetch.mockResolvedValue({
 			ok: true,
-			json: async () => ({ timer: 120 }),
+			json: async () => ({
+				timer_type: 'session',
+				ttl: 120,
+				total_duration: 300
+			}),
 		} as Response);
 
 		const result = await getTimers('12345');
@@ -189,6 +215,10 @@ describe('API functions', () => {
 			`${API_URL}/queue/timers/12345`,
 			expect.objectContaining({ method: 'GET' })
 		);
-		expect(result).toEqual({ timer: 120 });
+		expect(result).toEqual({
+			timer_type: 'session',
+			ttl: 120,
+			total_duration: 300
+		});
 	});
 });

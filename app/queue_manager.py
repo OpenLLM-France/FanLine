@@ -14,8 +14,8 @@ celery = Celery('queue_manager')
 logger = logging.getLogger('test_logger')
 
 # Récupération des variables d'environnement Redis
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+REDIS_HOST = os.getenv('REDIS_HOST', 'redis-test')  # Valeur par défaut pour Docker
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))     # Port interne Redis
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
 
 # Configuration de base
@@ -698,9 +698,13 @@ class QueueManager:
 
             if is_active and session_ttl > 0:
                 # Démarrer la tâche de mise à jour du timer de session
-                celery.send_task(
-                    'app.tasks.update_timer_channel',
-                    args=[user_id, 'session', session_ttl],
+                update_timer_channel.apply_async(
+                    kwargs={
+                        'channel': f'timer:channel:{user_id}',
+                        'initial_ttl': session_ttl,
+                        'timer_type': 'session',
+                        'max_updates': 3
+                    },
                     countdown=1
                 )
                 return {
@@ -711,9 +715,13 @@ class QueueManager:
 
             if is_draft and draft_ttl > 0:
                 # Démarrer la tâche de mise à jour du timer de draft
-                celery.send_task(
-                    'app.tasks.update_timer_channel',
-                    args=[user_id, 'draft', draft_ttl],
+                update_timer_channel.apply_async(
+                    kwargs={
+                        'channel': f'timer:channel:{user_id}',
+                        'initial_ttl': draft_ttl,
+                        'timer_type': 'draft',
+                        'max_updates': 3
+                    },
                     countdown=1
                 )
                 return {
@@ -856,10 +864,11 @@ async def cleanup_session(user_id: str):
             logger.debug(f"Connexion Redis fermée pour {user_id}")
 
 @celery.task(name='app.queue_manager.update_timer_channel')
-def update_timer_channel(channel: str, initial_ttl: int, timer_type: str, max_updates: int = 3):
+def update_timer_channel(channel: str, initial_ttl: int, timer_type: str, max_updates: int = 3, task_id: str = None):
     """Met à jour le canal de timer avec le TTL restant."""
     logger.info(f"Début de la tâche de mise à jour du timer pour {channel} (TTL initial: {initial_ttl})")
     redis_client = None
+    lock_key = f"lock:{channel}"
     
     try:
         # Utiliser un client Redis synchrone avec les variables d'environnement
@@ -870,12 +879,20 @@ def update_timer_channel(channel: str, initial_ttl: int, timer_type: str, max_up
             decode_responses=True
         )
         
+        # Essayer d'acquérir le verrou
+        if not redis_client.set(lock_key, task_id or "1", ex=10, nx=True):
+            logger.info(f"Une autre tâche est déjà en cours pour {channel}")
+            return {
+                'status': 'skipped',
+                'reason': 'locked'
+            }
+        
         updates_left = max_updates
-        current_ttl = initial_ttl
         user_id = channel.split(':')[-1]
         key = f"{timer_type}:{user_id}"
+        current_ttl = initial_ttl
         
-        while updates_left > 0 and current_ttl > 0:
+        while updates_left > 0:
             try:
                 # Vérifier l'état et le TTL en une seule transaction
                 pipe = redis_client.pipeline(transaction=True)
@@ -886,29 +903,28 @@ def update_timer_channel(channel: str, initial_ttl: int, timer_type: str, max_up
                 pipe.ttl(key)
                 results = pipe.execute()
                 
-                is_valid_state, current_ttl = results
+                is_valid_state, redis_ttl = results
                 
-                if not is_valid_state or current_ttl <= 0:
-                    logger.info(f"Timer invalide pour {user_id} (état={is_valid_state}, ttl={current_ttl})")
-                    break
-                    
-                # Publier la mise à jour
+                # Publier la mise à jour avec le TTL actuel
                 message = {
                     'timer_type': timer_type,
                     'ttl': current_ttl,
-                    'updates_left': updates_left
+                    'updates_left': updates_left,
+                    'task_id': task_id
                 }
                 redis_client.publish(channel, json.dumps(message))
                 logger.debug(f"Mise à jour du timer pour {channel} (TTL: {current_ttl}, updates: {updates_left})")
                 
                 updates_left -= 1
+                current_ttl = max(0, current_ttl - 1)
+                
                 if updates_left > 0:
                     time.sleep(1)  # Attendre 1 seconde avant la prochaine mise à jour
                     
             except Exception as e:
-                logger.error(f"Erreur lors de la mise à jour du timer pour {user_id}: {str(e)}")
+                logger.error(f"Erreur lors de la mise à jour du timer: {str(e)}")
                 break
-                
+        
         return {
             'status': 'success',
             'ttl': current_ttl,
@@ -923,4 +939,5 @@ def update_timer_channel(channel: str, initial_ttl: int, timer_type: str, max_up
         }
     finally:
         if redis_client:
-            redis_client.close()  # Utiliser close() car c'est un client synchrone 
+            redis_client.delete(lock_key)  # Libérer le verrou
+            redis_client.close() 

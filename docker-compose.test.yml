@@ -1,86 +1,94 @@
-version: '3.8'
-
 services:
   redis-test:
     image: redis:alpine
     ports:
       - "6380:6379"
-    networks:
-      - test-network
     command: redis-server --save "" --appendonly no
     volumes:
-      - redis-test-data:/data
+      - redis-data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   celery-test:
     build:
       context: .
       dockerfile: Dockerfile.test
     environment:
-      - REDIS_HOST=redis-test
-      - REDIS_PORT=6379
-      - REDIS_DB=1
-      - PYTHONPATH=/app
-      - CELERY_BROKER_URL=redis://${REDIS_HOST}:${REDIS_PORT}/1
-      - CELERY_RESULT_BACKEND=redis://${REDIS_HOST}:${REDIS_PORT}/1
+      REDIS_HOST: redis-test
+      REDIS_PORT: 6379
+      REDIS_DB: 1
+      PYTHONPATH: /app
+      CELERY_BROKER_URL: redis://redis-test:6379/1
+      CELERY_RESULT_BACKEND: redis://redis-test:6379/1
     depends_on:
       - redis-test
-    networks:
-      - test-network
     volumes:
       - ./app:/app/app
       - ./tests:/app/tests
+      - ./pytest.ini:/app/pytest.ini
     command: poetry run python tests/run_celery_worker.py
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   api:
     build:
       context: .
       dockerfile: Dockerfile.test
     environment:
-      - REDIS_HOST=redis-test
-      - REDIS_PORT=6379
-      - REDIS_DB=1
-      - PYTHONPATH=/app
-      - CELERY_BROKER_URL=redis://${REDIS_HOST}:${REDIS_PORT}/1
-      - CELERY_RESULT_BACKEND=redis://${REDIS_HOST}:${REDIS_PORT}/1
+      REDIS_HOST: redis-test
+      REDIS_PORT: 6379
+      REDIS_DB: 1
+      PYTHONPATH: /app
+      CELERY_BROKER_URL: redis://redis-test:6379/1
+      CELERY_RESULT_BACKEND: redis://redis-test:6379/1
     ports:
       - "8001:8000"
     depends_on:
       - redis-test
       - celery-test
-    networks:
-      - test-network
     volumes:
       - ./app:/app/app
       - ./tests:/app/tests
+      - ./pytest.ini:/app/pytest.ini
     command: poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   test:
     build:
       context: .
       dockerfile: Dockerfile.test
     environment:
-      - REDIS_HOST=redis-test
-      - REDIS_PORT=6379
-      - REDIS_DB=1
-      - PYTHONPATH=/app
-      - CELERY_BROKER_URL=redis://${REDIS_HOST}:${REDIS_PORT}/1
-      - CELERY_RESULT_BACKEND=redis://${REDIS_HOST}:${REDIS_PORT}/1
-      - API_URL=http://api:8000
-      - TEST_PATH=${TEST_PATH:-tests/}
+      REDIS_HOST: redis-test
+      REDIS_PORT: 6379
+      REDIS_DB: 1
+      PYTHONPATH: /app
+      CELERY_BROKER_URL: redis://redis-test:6379/1
+      CELERY_RESULT_BACKEND: redis://redis-test:6379/1
+      API_URL: http://api:8000
+      TEST_PATH: ${TEST_PATH:-tests/}
+      PYTHONUNBUFFERED: 1
+      PYTEST_ADDOPTS: "--cov=app --cov-report=term-missing"
+      DOCKER_ENV: "true"
     depends_on:
       - redis-test
       - api
       - celery-test
-    networks:
-      - test-network
     volumes:
       - ./app:/app/app
       - ./tests:/app/tests
-    command: sh -c 'poetry run pytest -v --cov=app --cov-report=term-missing ${TEST_PATH}'
+      - ./pytest.ini:/app/pytest.ini
+    command: sh -c 'poetry run pytest -v ${TEST_PATH}'
+    deploy:
+      resources:
+        limits:
+          memory: 2G
 
 volumes:
-  redis-test-data:
-
-networks:
-  test-network:
-    driver: bridge 
+  redis-data: 

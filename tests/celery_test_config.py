@@ -4,19 +4,26 @@ import os
 def setup_test_celery():
     """Configure Celery pour les tests en mode asynchrone."""
     # Récupération des variables d'environnement Redis
-    redis_host = os.getenv('REDIS_HOST', 'localhost')
+    redis_host = os.getenv('REDIS_HOST', 'redis-test')
     redis_port = int(os.getenv('REDIS_PORT', 6379))
-    redis_db = int(os.getenv('REDIS_DB', 0))
+    redis_db = int(os.getenv('REDIS_DB', 1))
+    
+    broker_url = f'redis://{redis_host}:{redis_port}/{redis_db}'
+    backend_url = f'redis://{redis_host}:{redis_port}/{redis_db}'
+    
+    print(f"Configuration Celery avec: host={redis_host}, port={redis_port}, db={redis_db}")
+    print(f"Broker URL: {broker_url}")
+    print(f"Backend URL: {backend_url}")
     
     celery_app = Celery(
         'test_app',
-        broker=f'redis://{redis_host}:{redis_port}/{redis_db}',
-        backend=f'redis://{redis_host}:{redis_port}/{redis_db}'
+        broker=broker_url,
+        backend=backend_url
     )
     
     celery_app.conf.update({
-        'broker_url': f'redis://{redis_host}:{redis_port}/{redis_db}',
-        'result_backend': f'redis://{redis_host}:{redis_port}/{redis_db}',
+        'broker_url': broker_url,
+        'result_backend': backend_url,
         'task_always_eager': False,  # Désactiver le mode eager
         'task_eager_propagates': False,
         'worker_prefetch_multiplier': 1,

@@ -50,8 +50,7 @@ class TestTimersAsync:
 
             # Lancer la tâche de manière asynchrone
             test_logger.debug("Lancement de la tâche update_timer_channel en mode asynchrone")
-            task = celery_app.send_task(
-                'app.queue_manager.update_timer_channel',
+            task = update_timer_channel.apply_async(
                 kwargs={
                     'channel': channel,
                     'initial_ttl': draft_ttl,

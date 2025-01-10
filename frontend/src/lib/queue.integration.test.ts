@@ -43,6 +43,10 @@ describe('Queue API Integration Tests', () => {
             expect(result.status).toBe('waiting');
             expect(result).toHaveProperty('position');
             expect(typeof result.position).toBe('number');
+            expect(result).toHaveProperty('remaining_time');
+            expect(typeof result.remaining_time).toBe('number');
+            expect(result).toHaveProperty('estimated_wait_time');
+            expect(typeof result.estimated_wait_time).toBe('number');
         });
     });
 
@@ -55,8 +59,10 @@ describe('Queue API Integration Tests', () => {
             const result = await getTimers(userId);
             expect(result).toHaveProperty('timer_type');
             expect(result).toHaveProperty('ttl');
+            expect(result).toHaveProperty('total_duration');
             expect(result.timer_type).toBe('draft');
             expect(typeof result.ttl).toBe('number');
+            expect(typeof result.total_duration).toBe('number');
         });
 
         it('devrait recevoir les messages de mise à jour des timers', async () => {
@@ -108,7 +114,9 @@ describe('Queue API Integration Tests', () => {
                                 'user_id' in data &&
                                 'timer_type' in data &&
                                 'ttl' in data &&
-                                typeof data.ttl === 'number'
+                                'total_duration' in data &&
+                                typeof data.ttl === 'number' &&
+                                typeof data.total_duration === 'number'
                             );
                         } catch {
                             return false;
@@ -167,9 +175,13 @@ describe('Queue API Integration Tests', () => {
             expect(result).toHaveProperty('active_users');
             expect(result).toHaveProperty('waiting_users');
             expect(result).toHaveProperty('total_slots');
+            expect(result).toHaveProperty('average_wait_time');
+            expect(result).toHaveProperty('average_session_time');
             expect(typeof result.active_users).toBe('number');
             expect(typeof result.waiting_users).toBe('number');
             expect(typeof result.total_slots).toBe('number');
+            expect(typeof result.average_wait_time).toBe('number');
+            expect(typeof result.average_session_time).toBe('number');
         });
     });
 }); 

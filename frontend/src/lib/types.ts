@@ -6,17 +6,22 @@ export interface UserRequest {
 export interface QueueStatus {
     status: 'waiting' | 'draft' | 'connected' | 'disconnected';
     position?: number;
+    remaining_time?: number;
+    estimated_wait_time?: number;
 }
 
 export interface QueueMetrics {
     active_users: number;
     waiting_users: number;
     total_slots: number;
+    average_wait_time: number;
+    average_session_time: number;
 }
 
 export interface TimerInfo {
     timer_type: 'draft' | 'session';
     ttl: number;
+    total_duration: number;
     channel?: string;
 }
 
