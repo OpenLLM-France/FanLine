@@ -113,8 +113,8 @@ class ResilientStack:
             self.network,
             environment={
                 "REDIS_HOST": "redis-proxy",
-                "CELERY_BROKER_URL": "redis://redis-proxy:6379/0",
-                "CELERY_RESULT_BACKEND": "redis://redis-proxy:6379/0"
+                "CELERY_BROKER_URL": "redis://redis-proxy:6379",
+                "CELERY_RESULT_BACKEND": "redis://redis-proxy:6379"
             },
             dependencies=["redis"]
         )
@@ -126,8 +126,8 @@ class ResilientStack:
             self.network,
             environment={
                 "REDIS_HOST": "redis-proxy",
-                "CELERY_BROKER_URL": "redis://redis-proxy:6379/0",
-                "CELERY_RESULT_BACKEND": "redis://redis-proxy:6379/0"
+                "CELERY_BROKER_URL": "redis://redis-proxy:6379",
+                "CELERY_RESULT_BACKEND": "redis://redis-proxy:6379"
             },
             health_check={
                 "test": ["CMD", "curl", "-f", "http://localhost:8000/queue/metrics"],

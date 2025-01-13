@@ -1694,7 +1694,7 @@ self = &lt;redis.connection.Connection(host=localhost,port=6379,db=1)&gt;
 <span style="font-weight: bold;">[31mE               ConnectionRefusedError: [Errno 111] Connection refused</span>
 <span style="font-weight: bold;">[31m/usr/local/lib/python3.13/site-packages/redis/connection.py</span>:718: ConnectionRefusedError
 <span style="color: #ffeb3b;">During handling of the above exception, another exception occurred:</span>
-self = &lt;Connection: redis://localhost:6379/1 at 0xffffb3733c50&gt;
+self = &lt;Connection: redis://localhost:6379 at 0xffffb3733c50&gt;
 ConnectionError = &lt;class &#x27;kombu.exceptions.OperationalError&#x27;&gt;
 ChannelError = &lt;class &#x27;kombu.exceptions.OperationalError&#x27;&gt;
     @contextmanager
@@ -1764,7 +1764,7 @@ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 <span style="font-weight: bold;">[31m/usr/local/lib/python3.13/contextlib.py</span>:162: in __exit__
     self.gen.throw(value)
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-self = &lt;Connection: redis://localhost:6379/1 at 0xffffb3733c50&gt;
+self = &lt;Connection: redis://localhost:6379 at 0xffffb3733c50&gt;
 ConnectionError = &lt;class &#x27;kombu.exceptions.OperationalError&#x27;&gt;
 ChannelError = &lt;class &#x27;kombu.exceptions.OperationalError&#x27;&gt;
     @contextmanager
@@ -1963,7 +1963,7 @@ self = &lt;redis.connection.Connection(host=localhost,port=6379,db=1)&gt;
 <span style="font-weight: bold;">[31mE               ConnectionRefusedError: [Errno 111] Connection refused</span>
 <span style="font-weight: bold;">[31m/usr/local/lib/python3.13/site-packages/redis/connection.py</span>:718: ConnectionRefusedError
 <span style="color: #ffeb3b;">During handling of the above exception, another exception occurred:</span>
-self = &lt;Connection: redis://localhost:6379/1 at 0xffffb3733c50&gt;
+self = &lt;Connection: redis://localhost:6379 at 0xffffb3733c50&gt;
 ConnectionError = &lt;class &#x27;kombu.exceptions.OperationalError&#x27;&gt;
 ChannelError = &lt;class &#x27;kombu.exceptions.OperationalError&#x27;&gt;
     @contextmanager
@@ -2033,7 +2033,7 @@ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 <span style="font-weight: bold;">[31m/usr/local/lib/python3.13/contextlib.py</span>:162: in __exit__
     self.gen.throw(value)
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-self = &lt;Connection: redis://localhost:6379/1 at 0xffffb3733c50&gt;
+self = &lt;Connection: redis://localhost:6379 at 0xffffb3733c50&gt;
 ConnectionError = &lt;class &#x27;kombu.exceptions.OperationalError&#x27;&gt;
 ChannelError = &lt;class &#x27;kombu.exceptions.OperationalError&#x27;&gt;
     @contextmanager

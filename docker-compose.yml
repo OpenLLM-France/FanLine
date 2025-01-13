@@ -8,8 +8,8 @@ services:
       - "5678:5678"
     environment:
       REDIS_HOST: redis
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379
+      CELERY_RESULT_BACKEND: redis://redis:6379
       PYTHONDONTWRITEBYTECODE: 1
       PYTHONUNBUFFERED: 1
       DEBUG: "true"
@@ -53,8 +53,8 @@ services:
       dockerfile: Dockerfile.celery
     environment:
       REDIS_HOST: redis
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379
+      CELERY_RESULT_BACKEND: redis://redis:6379
     depends_on:
       - redis
     networks:

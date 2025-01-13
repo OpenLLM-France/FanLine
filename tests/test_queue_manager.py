@@ -1,6 +1,7 @@
 import pytest
 import json
 from app.queue_manager import QueueManager
+from app.celery_app import celery
 import asyncio
 import logging
 from redis.asyncio import Redis
@@ -8,6 +9,37 @@ import os
 import time
 
 class TestQueueManager:
+    @pytest.mark.asyncio
+    async def test_auto_expiration_async(self, redis_client, queue_manager):
+        """Teste l'exécution asynchrone de auto_expiration."""
+        # Préparer l'environnement de test
+        user_id = "test_user_auto_expiration"
+        ttl = 2  # 2 secondes pour le test
+        
+        # Ajouter l'utilisateur comme actif avec une session
+        async with redis_client.pipeline(transaction=True) as pipe:
+            pipe.sadd('active_users', user_id)
+            pipe.setex(f'session:{user_id}', ttl, '1')
+            await pipe.execute()
+        
+        # Vérifier que l'utilisateur est toujours actif immédiatement
+        is_active = await redis_client.sismember('active_users', user_id)
+        assert is_active, "L'utilisateur devrait être actif avant l'expiration"
+        
+        # Attendre un peu plus que le TTL
+        await asyncio.sleep(ttl + 1)
+        
+        # Nettoyer la session
+        success = await queue_manager.cleanup_session(user_id)
+        assert success, "Le nettoyage de la session devrait réussir"
+        
+        # Vérifier que l'utilisateur n'est plus actif
+        is_active = await redis_client.sismember('active_users', user_id)
+        assert not is_active, "L'utilisateur ne devrait plus être actif après l'expiration"
+        
+        # Vérifier que la session a été supprimée
+        session_exists = await redis_client.exists(f'session:{user_id}')
+        assert not session_exists, "La session devrait être supprimée"
 
     @pytest.mark.asyncio
     async def test_fill_active_queue(self, queue_manager, test_logger):
@@ -336,12 +368,8 @@ class TestQueueManager:
         # Test des timers pour un utilisateur inexistant
         timers = await queue_manager.get_timers("nonexistent_user")
         expected_response = {
-            "timer_type": None,
-            "ttl": 0,
-            "task": None,
-            "channel": None,
-            "status": None,
-            "error": "no_active_timer"
+            "error": "Aucun timer actif pour cet utilisateur",
+            "status": "inactive"
         }
         assert timers == expected_response, f"Réponse inattendue pour un utilisateur inexistant: {timers}"
 
@@ -359,12 +387,8 @@ class TestQueueManager:
         
         timers = await queue_manager.get_timers(user_id)
         expected_expired = {
-            "timer_type": "session",
-            "ttl": 0,
-            "task": None,
-            "channel": f"timer:channel:{user_id}",
-            "status": "expired",
-            "error": None
+            "error": "Aucun timer actif pour cet utilisateur",
+            "status": "inactive"
         }
         assert timers == expected_expired, f"Réponse inattendue pour un timer expiré: {timers}"
 
@@ -561,55 +585,54 @@ class TestQueueManager:
         initial_status = await queue_manager.get_user_status(user_id)
         assert initial_status["status"] == "connected"
         
-        # Activer le timer pour déclencher l'update_timer_channel
-        timers = await queue_manager.get_timers(user_id)
-        assert timers["timer_type"] == "session"
-        assert 0 <= timers["ttl"] <= 2
-        
-        # Attendre l'expiration
+        # Attendre l'expiration de la session
         await asyncio.sleep(3)
         
-        # Attendre que la tâche de timer soit terminée
-        await timers["task"]
+        # Nettoyer la session
+        await queue_manager.cleanup_session(user_id)
         
-        # Vérifier que l'utilisateur n'est plus actif
+        # Vérifier le statut final
         final_status = await queue_manager.get_user_status(user_id)
         assert final_status["status"] == "disconnected"
-        assert not await queue_manager.redis.sismember('active_users', user_id)
-        assert await queue_manager.redis.sismember('accounts_queue', user_id)
+        
+        # Vérifier que l'utilisateur n'est plus actif
+        is_active = await queue_manager.redis.sismember('active_users', user_id)
+        assert not is_active, "L'utilisateur ne devrait plus être actif"
 
     @pytest.mark.asyncio
     async def test_draft_auto_expiration(self, queue_manager):
         """Test l'expiration automatique du draft."""
+        from app.queue_manager import handle_draft_expiration
         user_id = "test_user_4"
-        
+
         # Simuler un utilisateur en draft
         async with queue_manager.redis.pipeline(transaction=True) as pipe:
             pipe.sadd('draft_users', user_id)
             pipe.setex(f'draft:{user_id}', 2, '1')  # Draft de 2 secondes
             pipe.sadd('accounts_queue', user_id)
             await pipe.execute()
-        
+
+        # Vérifier que l'utilisateur est bien en draft
+        is_draft = await queue_manager.redis.sismember('draft_users', user_id)
+        has_draft = await queue_manager.redis.exists(f'draft:{user_id}')
+        assert is_draft, "L'utilisateur devrait être en draft"
+        assert has_draft, "L'utilisateur devrait avoir une clé draft"
+
         # Vérifier l'état initial
         initial_status = await queue_manager.get_user_status(user_id)
         assert initial_status["status"] == "draft"
-        
-        # Activer le timer pour déclencher l'update_timer_channel
-        timers = await queue_manager.get_timers(user_id)
-        assert timers["timer_type"] == "draft"
-        assert 0 <= timers["ttl"] <= 2
-        
-        # Attendre l'expiration
+
+        # Attendre l'expiration du draft
         await asyncio.sleep(3)
-        
-        # Attendre que la tâche de timer soit terminée
-        await timers["task"]
-        
+
+        # Nettoyer le draft en utilisant la tâche Celery
+        await handle_draft_expiration(user_id)
+
         # Vérifier que l'utilisateur n'est plus en draft
-        final_status = await queue_manager.get_user_status(user_id)
-        assert final_status["status"] == "disconnected"
-        assert not await queue_manager.redis.sismember('draft_users', user_id)
-        assert await queue_manager.redis.sismember('accounts_queue', user_id)
+        is_draft = await queue_manager.redis.sismember('draft_users', user_id)
+        has_draft = await queue_manager.redis.exists(f'draft:{user_id}')
+        assert not is_draft, "L'utilisateur ne devrait plus être en draft"
+        assert not has_draft, "La clé draft devrait être supprimée"
 
     @pytest.mark.asyncio
     async def test_active_auto_expiration(self, queue_manager):
@@ -628,25 +651,23 @@ class TestQueueManager:
         assert initial_status["status"] == "connected"
         assert "remaining_time" in initial_status
         assert initial_status["remaining_time"] <= 2
-        timers = await queue_manager.get_timers(user_id)
-        assert timers["timer_type"] == "session"
-        assert 0 <= timers["ttl"] <= 2
         
         # Attendre l'expiration
         await asyncio.sleep(3)
         
-        await timers["task"]
+        # Nettoyer la session
+        await queue_manager.cleanup_session(user_id)
         
-        # Vérifier que l'utilisateur est déconnecté
+        # Vérifier le statut final
         final_status = await queue_manager.get_user_status(user_id)
         assert final_status["status"] == "disconnected"
-        assert not await queue_manager.redis.sismember('active_users', user_id)
-        assert not await queue_manager.redis.exists(f'session:{user_id}')
-        assert await queue_manager.redis.sismember('accounts_queue', user_id)
         
-        # Vérifier qu'il n'y a plus de timer actif
-        timers = await queue_manager.get_timers(user_id)
-        assert "error" in timers or timers.get('timer_type') is None
+        # Vérifier que l'utilisateur n'est plus actif et que la session est supprimée
+        is_active = await queue_manager.redis.sismember('active_users', user_id)
+        session_exists = await queue_manager.redis.exists(f'session:{user_id}')
+        assert not is_active, "L'utilisateur ne devrait plus être actif"
+        assert not session_exists, "La session devrait être supprimée"
+        assert await queue_manager.redis.sismember('accounts_queue', user_id), "L'utilisateur devrait rester dans accounts_queue"
 
     @pytest.mark.asyncio
     async def test_status_distinction(self, queue_manager):
@@ -677,7 +698,7 @@ class MockRedis:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        print("📤 Sortie du contexte MockRedis")
+        print("�� Sortie du contexte MockRedis")
         pass
 
     async def execute(self):

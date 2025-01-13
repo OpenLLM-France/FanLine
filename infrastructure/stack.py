@@ -50,8 +50,8 @@ celery = docker.Container(
     image=celery_image.name,
     environment={
         "REDIS_HOST": "redis",
-        "CELERY_BROKER_URL": "redis://redis:6379/0",
-        "CELERY_RESULT_BACKEND": "redis://redis:6379/0"
+        "CELERY_BROKER_URL": "redis://redis:6379",
+        "CELERY_RESULT_BACKEND": "redis://redis:6379"
     },
     networks_advanced=[{
         "name": redis_network.name
@@ -76,8 +76,8 @@ api = docker.Container(
     ports=[{"internal": 8000, "external": 8000}],
     environment={
         "REDIS_HOST": "redis",
-        "CELERY_BROKER_URL": "redis://redis:6379/0",
-        "CELERY_RESULT_BACKEND": "redis://redis:6379/0"
+        "CELERY_BROKER_URL": "redis://redis:6379",
+        "CELERY_RESULT_BACKEND": "redis://redis:6379"
     },
     networks_advanced=[{
         "name": redis_network.name

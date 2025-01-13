@@ -282,26 +282,31 @@ async def heartbeat(
     user_id: str,
     queue_manager: QueueManager = Depends(get_queue_manager)
 ) -> Dict:
-    """Permet à un utilisateur de maintenir sa session active."""
+    """Prolonge la session d'un utilisateur actif."""
     try:
-        # Vérifier l'état actuel de l'utilisateur
-        current_status = await queue_manager.get_user_status(user_id)
-        
         # Vérifier si l'utilisateur est actif
-        if current_status["status"] != "connected":
+        is_active = await queue_manager.redis.sismember('active_users', user_id)
+        if not is_active:
             raise HTTPException(
                 status_code=404,
-                detail="Utilisateur non trouvé dans les sessions actives"
+                detail="Utilisateur non trouvé ou non actif"
             )
         
-        # Renouveler la session
-        await queue_manager.redis.expire(f'session:{user_id}', queue_manager.session_duration)
+        # Prolonger la session
+        success = await queue_manager.extend_session(user_id)
+        if not success:
+            raise HTTPException(
+                status_code=400,
+                detail="Erreur lors de la prolongation de la session"
+            )
+        
+        # Récupérer le TTL actuel
+        ttl = await queue_manager.redis.ttl(f'session:{user_id}')
         
         return {
-            "status": "success",
-            "message": "Session renouvelée avec succès",
+            "status": "extended",
             "user_id": user_id,
-            "ttl": await queue_manager.redis.ttl(f'session:{user_id}')
+            "ttl": ttl
         }
         
     except HTTPException as he:

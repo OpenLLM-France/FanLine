@@ -2,49 +2,51 @@ import { createClient } from 'redis';
 import type { RedisClientType } from 'redis';
 
 // Créer un client Redis avec les paramètres de connexion
-const redisClient = createClient({
+const client = createClient({
     url: process.env.REDIS_URL || 'redis://localhost:6379',
-    database: Number.parseInt(process.env.REDIS_DB || '0')
+    socket: {
+        reconnectStrategy: retries => Math.min(retries * 50, 1000)
+    }
 });
 
 // Connexion à Redis
-redisClient.connect().catch((error: Error) => console.error('Redis Connection Error:', error));
+client.connect().catch((error: Error) => console.error('Redis Connection Error:', error));
 
 // Gérer les erreurs de connexion
-redisClient.on('error', (error: Error) => console.error('Redis Client Error:', error));
+client.on('error', (error: Error) => console.error('Redis Client Error:', error));
 
 // Wrapper pour les méthodes Redis
 const wrappedClient = {
     async SREM(key: string, member: string): Promise<number> {
-        return redisClient.SREM(key, member);
+        return client.SREM(key, member);
     },
 
     async SADD(key: string, member: string): Promise<number> {
-        return redisClient.SADD(key, member);
+        return client.SADD(key, member);
     },
 
     async LREM(key: string, count: number, element: string): Promise<number> {
-        return redisClient.LREM(key, count, element);
+        return client.LREM(key, count, element);
     },
 
     async RPUSH(key: string, element: string): Promise<number> {
-        return redisClient.RPUSH(key, element);
+        return client.RPUSH(key, element);
     },
 
     async LPOS(key: string, element: string): Promise<number | null> {
-        return redisClient.LPOS(key, element);
+        return client.LPOS(key, element);
     },
 
     async EXISTS(key: string): Promise<number> {
-        return redisClient.EXISTS(key);
+        return client.EXISTS(key);
     },
 
     async SETEX(key: string, seconds: number, value: string): Promise<string | null> {
-        return redisClient.SETEX(key, seconds, value);
+        return client.SETEX(key, seconds, value);
     },
 
     async DEL(key: string): Promise<number> {
-        return redisClient.DEL(key);
+        return client.DEL(key);
     }
 };
 

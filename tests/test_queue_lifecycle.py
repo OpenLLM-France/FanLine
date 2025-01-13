@@ -11,12 +11,10 @@ async def get_redis_client():
     """Crée et retourne un client Redis."""
     redis_host = os.getenv('REDIS_HOST', 'localhost')
     redis_port = int(os.getenv('REDIS_PORT', 6379))
-    redis_db = int(os.getenv('REDIS_DB', 0))
     
     client = redis.Redis(
         host=redis_host,
         port=redis_port,
-        db=redis_db,
         decode_responses=True
     )
     return client
@@ -25,6 +23,11 @@ async def get_redis_client():
 async def test_user_queue_lifecycle(test_client, queue_manager_with_checker, test_logger):
     """Test le cycle de vie complet d'un utilisateur dans la file d'attente."""
     test_logger.info("Début du test du cycle de vie utilisateur")
+    
+    # Nettoyer Redis au début du test
+    redis = await get_redis_client()
+    await redis.flushdb()
+    
     user_id = "test_lifecycle_user"
     
     # 1. Vérifier le statut initial
@@ -68,7 +71,7 @@ async def test_user_queue_lifecycle(test_client, queue_manager_with_checker, tes
     
     # 4. Confirmer la connexion
     test_logger.debug("Confirmation de la connexion")
-    response = await test_client.post("/queue/confirm", json={"user_id": user_id})
+    response = await test_client.post(f"/queue/confirm/{user_id}")
     assert response.status_code == 200
     
     # 5. Vérifier le statut final
@@ -84,6 +87,10 @@ async def test_user_queue_lifecycle(test_client, queue_manager_with_checker, tes
 async def test_multiple_users_queue(test_client, queue_manager_with_checker, test_logger):
     """Test le comportement de la file d'attente avec plusieurs utilisateurs."""
     test_logger.info("Début du test multi-utilisateurs")
+    
+    # Nettoyer Redis au début du test
+    redis = await get_redis_client()
+    await redis.flushdb()
     
     # Créer plusieurs utilisateurs
     users = [f"test_user_{i}" for i in range(5)]
@@ -136,7 +143,7 @@ async def test_multiple_users_queue(test_client, queue_manager_with_checker, tes
     test_logger.debug("Confirmation des connexions pour les utilisateurs en draft")
     for user_id in draft_users:
         test_logger.info(f"Confirmation de la connexion pour {user_id}")
-        response = await test_client.post("/queue/confirm", json={"user_id": user_id})
+        response = await test_client.post(f"/queue/confirm/{user_id}")
         assert response.status_code == 200
     
     # 4. Vérifier les métriques finales
@@ -163,6 +170,9 @@ async def test_check_available_slots():
     queue_manager = QueueManager(redis)
     
     try:
+        # Nettoyer Redis au début du test
+        await redis.flushdb()
+        
         # Vérifier les slots disponibles initialement
         slots_available = await queue_manager.check_available_slots()
         assert slots_available == True, "Des slots devraient être disponibles au départ"
@@ -197,7 +207,11 @@ async def test_check_available_slots():
         
         # Vérifier que les slots sont maintenant disponibles
         slots_available = await queue_manager.check_available_slots()
-        assert slots_available == True, "Un slot devrait être disponible"
+        assert slots_available == False, "Le slot libéré a été pris par un utilisateur en draft"
+        
+        # Vérifier qu'un utilisateur est passé en draft
+        is_draft = await redis.sismember('draft_users', 'waiting_user_0')
+        assert is_draft == True, "Le premier utilisateur en attente devrait être passé en draft"
         
     finally:
         # Nettoyage

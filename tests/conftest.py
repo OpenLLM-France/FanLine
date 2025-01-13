@@ -63,8 +63,8 @@ os.environ['TESTING'] = 'true'
 def celery_config():
     """Configure Celery pour les tests."""
     config = {
-        'broker_url': 'redis://localhost:6379/0',
-        'result_backend': 'redis://localhost:6379/0',
+        'broker_url': 'redis://localhost:6379',
+        'result_backend': 'redis://localhost:6379',
         'task_always_eager': False,  # Désactiver le mode eager pour les tests de stress
         'task_eager_propagates': False,
         'worker_prefetch_multiplier': 1,

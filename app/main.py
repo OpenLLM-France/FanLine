@@ -8,8 +8,22 @@ from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import logging
+import asyncio
+from celery.result import AsyncResult
 
+# Configuration du logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Configuration spécifique pour le QueueManager
+queue_logger = logging.getLogger('app.queue_manager')
+queue_logger.setLevel(logging.DEBUG)
+
+# Autres loggers
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 class UserRequest(BaseModel):
     user_id: str
@@ -199,22 +213,37 @@ async def get_status(user_id: str, queue_manager: QueueManager = Depends(get_que
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/queue/heartbeat")
-async def heartbeat(request: UserRequest, queue_manager: QueueManager = Depends(get_queue_manager)) -> Dict:
-    """Endpoint pour maintenir la session active."""
-    success = await queue_manager.extend_session(request.user_id)
+@app.post("/queue/heartbeat/{user_id}")
+async def heartbeat_path(
+    user_id: str,
+    queue_manager: QueueManager = Depends(get_queue_manager)
+) -> Dict:
+    """Endpoint pour maintenir la session active (via paramètre URL)."""
+    success = await queue_manager.extend_session(user_id)
     if not success:
         raise HTTPException(status_code=404, detail="No active session found")
     
     # Vérifier que l'utilisateur est toujours dans active_users
-    is_active = await queue_manager.redis.sismember("active_users", request.user_id)
+    is_active = await queue_manager.redis.sismember("active_users", user_id)
     if not is_active:
         raise HTTPException(status_code=404, detail="User not in active users")
     
-    # Étendre la session
-    await queue_manager.redis.setex(f"session:{request.user_id}", queue_manager.session_duration, "1")
+    # Récupérer le TTL actuel
+    ttl = await queue_manager.redis.ttl(f"session:{user_id}")
     
-    return {"success": True}
+    return {
+        "status": "extended",
+        "user_id": user_id,
+        "ttl": ttl
+    }
+
+@app.post("/queue/heartbeat")
+async def heartbeat_body(
+    request: UserRequest,
+    queue_manager: QueueManager = Depends(get_queue_manager)
+) -> Dict:
+    """Endpoint pour maintenir la session active (via corps JSON)."""
+    return await heartbeat_path(request.user_id, queue_manager)
 
 @app.get("/queue/metrics")
 async def get_metrics(queue_manager: QueueManager = Depends(get_queue_manager)) -> Dict:
@@ -255,13 +284,26 @@ async def get_timers(user_id: str, queue_manager: QueueManager = Depends(get_que
     timers = await queue_manager.get_timers(user_id)
 
     # Nettoyer la réponse pour la rendre sérialisable
-    if "task" in timers and timers["task"] is not None:
-        # Supprimer l'objet Task ou le convertir en données simples
-        task_info = await timers["task"]
-        if hasattr(task_info, 'result'):
-            timers["task_result"] = task_info.result
     if "task" in timers:
-        del timers["task"]
+        if asyncio.iscoroutine(timers["task"]):
+            # Si c'est une coroutine, on l'attend
+            timers["task"] = await timers["task"]
+        elif isinstance(timers["task"], AsyncResult):
+            # Si c'est un AsyncResult de Celery, on récupère le résultat
+            try:
+                timers["task"] = await asyncio.wait_for(
+                    asyncio.to_thread(timers["task"].get),
+                    timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                timers["status"] = "error"
+                timers["error"] = "The operation timed out."
+            except Exception as e:
+                timers["status"] = "error"
+                timers["error"] = str(e)
+        else:
+            # Si c'est une autre valeur, on la garde telle quelle
+            pass
 
     return timers
 
@@ -278,3 +320,20 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
     except Exception as e:
         print(f"Erreur WebSocket pour {user_id}: {str(e)}")
         manager.disconnect(user_id) 
+
+@app.on_event("startup")
+async def startup_event():
+    """Configure les connexions Redis et le gestionnaire de file d'attente au démarrage."""
+    global redis_client, queue_manager
+    
+    redis_host = os.getenv('REDIS_HOST', 'localhost')
+    redis_port = int(os.getenv('REDIS_PORT', 6379))
+    
+    redis_client = redis.Redis(
+        host=redis_host,
+        port=redis_port,
+        decode_responses=True
+    )
+    
+    queue_manager = QueueManager(redis_client)
+    await queue_manager.initialize() 
