@@ -5,18 +5,24 @@ import customFetch from './fetch';
 interface QueueStatus {
     status: 'waiting' | 'draft' | 'connected';
     position?: number;
+    remaining_time: number;
+    estimated_wait_time: number;
+    timestamp: string;
 }
 
 interface QueueMetrics {
     active_users: number;
     waiting_users: number;
     total_slots: number;
+    average_wait_time: number;
+    average_session_time: number;
 }
 
 interface TimerInfo {
     ttl: number;
     channel: string;
     timer_type: 'session' | 'draft';
+    total_duration: number;
 }
 
 // Base API URL
@@ -79,32 +85,39 @@ export const leaveQueue = async (userRequest: UserRequest): Promise<{ success: b
 };
 
 // Confirm Connection
-export const confirmConnection = async (userRequest: UserRequest): Promise<{ session_duration: number }> => {
-    const response = await customFetch(`${API_URL}/queue/confirm`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(userRequest),
-    });
+export const confirmConnection = async (userRequest: UserRequest): Promise<{ session_duration: number, total_duration: number }> => {
+    try {
+        const response = await customFetch(`${API_URL}/queue/confirm`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(userRequest),
+        });
 
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail);
+        }
+
+        const data = await response.json();
+        return {
+            session_duration: data.session_duration,
+            total_duration: data.total_duration || data.session_duration
+        };
+    } catch (error) {
+        handleFetchError(error);
+        throw error;
     }
-
-    return await response.json();
 };
 
 // Get Status
 export const getStatus = async (userId: string): Promise<QueueStatus> => {
     try {
         console.log('Tentative de getStatus pour:', userId);
-        const response = await customFetch(`${API_URL}/queue/status/${userId}`, {
-            method: 'GET',
-        });
-
+        const response = await customFetch(`${API_URL}/queue/status/${userId}`);
         console.log('Réponse getStatus:', response.status);
+
         if (!response.ok) {
             const error = await response.json();
             console.error('Erreur getStatus:', error);
@@ -113,9 +126,14 @@ export const getStatus = async (userId: string): Promise<QueueStatus> => {
 
         const data = await response.json();
         console.log('Données getStatus:', data);
-        return data;
+        return {
+            status: data.status,
+            position: data.position,
+            remaining_time: data.remaining_time || 0,
+            estimated_wait_time: data.estimated_wait_time || 0,
+            timestamp: data.timestamp
+        };
     } catch (error) {
-        console.error('Exception getStatus:', error);
         handleFetchError(error);
         throw error;
     }
@@ -141,28 +159,45 @@ export const heartbeat = async (userRequest: UserRequest): Promise<{ success: bo
 
 // Get Metrics
 export const getMetrics = async (): Promise<QueueMetrics> => {
-    const response = await customFetch(`${API_URL}/queue/metrics`, {
-        method: 'GET',
-    });
+    try {
+        const response = await customFetch(`${API_URL}/queue/metrics`);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail);
+        }
 
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail);
+        const data = await response.json();
+        return {
+            active_users: data.active_users,
+            waiting_users: data.waiting_users,
+            total_slots: data.total_slots,
+            average_wait_time: data.average_wait_time || 0,
+            average_session_time: data.average_session_time || 0
+        };
+    } catch (error) {
+        handleFetchError(error);
+        throw error;
     }
-
-    return await response.json();
 };
 
 // Get Timers
 export const getTimers = async (userId: string): Promise<TimerInfo> => {
-    const response = await customFetch(`${API_URL}/queue/timers/${userId}`, {
-        method: 'GET',
-    });
+    try {
+        const response = await customFetch(`${API_URL}/queue/timers/${userId}`);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail);
+        }
 
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail);
+        const data = await response.json();
+        return {
+            timer_type: data.timer_type,
+            ttl: data.ttl,
+            total_duration: data.total_duration || data.ttl,
+            channel: data.channel
+        };
+    } catch (error) {
+        handleFetchError(error);
+        throw error;
     }
-
-    return await response.json();
 };

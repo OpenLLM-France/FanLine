@@ -181,7 +181,7 @@ def test_env():
     # Lancer l'application avec la bonne configuration
     click.echo("Démarrage de l'application...")
     os.environ['REDIS_PORT'] = "6380"
-    cmd = "uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload"
+    cmd = "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     subprocess.run(cmd.split())
 
 if __name__ == '__main__':

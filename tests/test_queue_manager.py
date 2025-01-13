@@ -3,6 +3,9 @@ import json
 from app.queue_manager import QueueManager
 import asyncio
 import logging
+from redis.asyncio import Redis
+import os
+import time
 
 class TestQueueManager:
 
@@ -329,27 +332,47 @@ class TestQueueManager:
     async def test_timer_edge_cases(self, queue_manager):
         """Test les cas limites des timers."""
         print("\n🔄 Test des cas limites des timers")
-        
+
         # Test des timers pour un utilisateur inexistant
         timers = await queue_manager.get_timers("nonexistent_user")
-        assert timers == {}
-        
+        expected_response = {
+            "timer_type": None,
+            "ttl": 0,
+            "task": None,
+            "channel": None,
+            "status": None,
+            "error": "no_active_timer"
+        }
+        assert timers == expected_response, f"Réponse inattendue pour un utilisateur inexistant: {timers}"
+
         # Test des timers avec TTL négatif (clé expirée)
         user_id = "expired_timer_user"
-        await queue_manager.redis.sadd('active_users', user_id)
-        await queue_manager.redis.setex(f'session:{user_id}', 1, '1')
-        await asyncio.sleep(1.1)  # Attendre l'expiration
-        timers = await queue_manager.get_timers(user_id)
-        assert timers == {}
         
-        # Test des timers avec erreur Redis
-        original_redis = queue_manager.redis
-        queue_manager.redis = None
-        try:
-            timers = await queue_manager.get_timers("error_timer_user")
-            assert timers == {}
-        finally:
-            queue_manager.redis = original_redis
+        # Configuration complète de l'état initial
+        await queue_manager.redis.sadd('active_users', user_id)
+        await queue_manager.redis.setex(f'session:{user_id}', 1, 'active')  # Définir le statut actif
+        await queue_manager.redis.set(f"last_status:{user_id}", "active")   # Dernier statut
+        await queue_manager.redis.rpush(f"status_history:{user_id}", "active")  # Historique
+        
+        # Attendre que le timer expire
+        await asyncio.sleep(1.1)
+        
+        timers = await queue_manager.get_timers(user_id)
+        expected_expired = {
+            "timer_type": "session",
+            "ttl": 0,
+            "task": None,
+            "channel": f"timer:channel:{user_id}",
+            "status": "expired",
+            "error": None
+        }
+        assert timers == expected_expired, f"Réponse inattendue pour un timer expiré: {timers}"
+
+        # Nettoyage complet
+        await queue_manager.redis.delete(f"session:{user_id}")
+        await queue_manager.redis.delete(f"status_history:{user_id}")
+        await queue_manager.redis.delete(f"last_status:{user_id}")
+        await queue_manager.redis.srem("active_users", user_id)
 
     @pytest.mark.asyncio
     async def test_slot_checker_lifecycle(self, queue_manager):
@@ -486,6 +509,160 @@ class TestQueueManager:
             
         assert status["status"] == "connected", "Le statut final devrait être 'connected'"
         assert status["position"] == -2, "La position en connected devrait être -2"
+
+    @pytest.mark.asyncio
+    async def test_accounts_queue_add_on_waiting(self, queue_manager):
+        """Test que l'utilisateur est ajouté à accounts_queue dès son entrée dans la waiting queue."""
+        user_id = "test_user_1"
+        
+        # Vérifier que l'utilisateur n'est pas dans accounts_queue au début
+        assert not await queue_manager.redis.sismember('accounts_queue', user_id)
+        
+        # Ajouter l'utilisateur à la file d'attente
+        result = await queue_manager.add_to_queue(user_id)
+        assert result["commit_status"] in ["waiting", "draft"]
+        
+        # Vérifier que l'utilisateur est maintenant dans accounts_queue
+        assert await queue_manager.redis.sismember('accounts_queue', user_id)
+        
+        # Vérifier que le statut est correct pour un nouvel utilisateur
+        status = await queue_manager.get_user_status(user_id)
+        assert status["status"] in ["waiting", "draft"]
+
+    @pytest.mark.asyncio
+    async def test_accounts_queue_persistence(self, queue_manager: QueueManager):
+        """Test que l'utilisateur reste dans accounts_queue même après déconnexion."""
+        user_id = "test_user_2"
+        
+        # Ajouter puis retirer l'utilisateur de la file
+        await queue_manager.add_to_queue(user_id)
+        await queue_manager.remove_from_queue(user_id)
+        
+        # Vérifier qu'il est toujours dans accounts_queue
+        assert await queue_manager.redis.sismember('accounts_queue', user_id)
+        
+        # Vérifier que son statut est "disconnected" et non "None"
+        status = await queue_manager.get_user_status(user_id)
+        assert status["status"] == "disconnected"
+
+    @pytest.mark.asyncio
+    async def test_session_auto_expiration(self, queue_manager : QueueManager):
+        """Test l'expiration automatique de la session."""
+        user_id = "test_user_3"
+        
+        # Simuler un utilisateur actif
+        async with queue_manager.redis.pipeline(transaction=True) as pipe:
+            pipe.sadd('active_users', user_id)
+            pipe.setex(f'session:{user_id}', 2, '1')  # Session de 2 secondes
+            pipe.sadd('accounts_queue', user_id)  # Ajouter à accounts_queue pour avoir le statut disconnected après
+            await pipe.execute()
+        
+        # Vérifier l'état initial
+        initial_status = await queue_manager.get_user_status(user_id)
+        assert initial_status["status"] == "connected"
+        
+        # Activer le timer pour déclencher l'update_timer_channel
+        timers = await queue_manager.get_timers(user_id)
+        assert timers["timer_type"] == "session"
+        assert 0 <= timers["ttl"] <= 2
+        
+        # Attendre l'expiration
+        await asyncio.sleep(3)
+        
+        # Attendre que la tâche de timer soit terminée
+        await timers["task"]
+        
+        # Vérifier que l'utilisateur n'est plus actif
+        final_status = await queue_manager.get_user_status(user_id)
+        assert final_status["status"] == "disconnected"
+        assert not await queue_manager.redis.sismember('active_users', user_id)
+        assert await queue_manager.redis.sismember('accounts_queue', user_id)
+
+    @pytest.mark.asyncio
+    async def test_draft_auto_expiration(self, queue_manager):
+        """Test l'expiration automatique du draft."""
+        user_id = "test_user_4"
+        
+        # Simuler un utilisateur en draft
+        async with queue_manager.redis.pipeline(transaction=True) as pipe:
+            pipe.sadd('draft_users', user_id)
+            pipe.setex(f'draft:{user_id}', 2, '1')  # Draft de 2 secondes
+            pipe.sadd('accounts_queue', user_id)
+            await pipe.execute()
+        
+        # Vérifier l'état initial
+        initial_status = await queue_manager.get_user_status(user_id)
+        assert initial_status["status"] == "draft"
+        
+        # Activer le timer pour déclencher l'update_timer_channel
+        timers = await queue_manager.get_timers(user_id)
+        assert timers["timer_type"] == "draft"
+        assert 0 <= timers["ttl"] <= 2
+        
+        # Attendre l'expiration
+        await asyncio.sleep(3)
+        
+        # Attendre que la tâche de timer soit terminée
+        await timers["task"]
+        
+        # Vérifier que l'utilisateur n'est plus en draft
+        final_status = await queue_manager.get_user_status(user_id)
+        assert final_status["status"] == "disconnected"
+        assert not await queue_manager.redis.sismember('draft_users', user_id)
+        assert await queue_manager.redis.sismember('accounts_queue', user_id)
+
+    @pytest.mark.asyncio
+    async def test_active_auto_expiration(self, queue_manager):
+        """Test l'expiration automatique des utilisateurs actifs."""
+        user_id = "test_user_5"
+        
+        # Simuler un utilisateur actif avec une session courte
+        async with queue_manager.redis.pipeline(transaction=True) as pipe:
+            pipe.sadd('active_users', user_id)
+            pipe.setex(f'session:{user_id}', 2, '1')  # Session de 2 secondes
+            pipe.sadd('accounts_queue', user_id)
+            await pipe.execute()
+        
+        # Vérifier l'état initial
+        initial_status = await queue_manager.get_user_status(user_id)
+        assert initial_status["status"] == "connected"
+        assert "remaining_time" in initial_status
+        assert initial_status["remaining_time"] <= 2
+        timers = await queue_manager.get_timers(user_id)
+        assert timers["timer_type"] == "session"
+        assert 0 <= timers["ttl"] <= 2
+        
+        # Attendre l'expiration
+        await asyncio.sleep(3)
+        
+        await timers["task"]
+        
+        # Vérifier que l'utilisateur est déconnecté
+        final_status = await queue_manager.get_user_status(user_id)
+        assert final_status["status"] == "disconnected"
+        assert not await queue_manager.redis.sismember('active_users', user_id)
+        assert not await queue_manager.redis.exists(f'session:{user_id}')
+        assert await queue_manager.redis.sismember('accounts_queue', user_id)
+        
+        # Vérifier qu'il n'y a plus de timer actif
+        timers = await queue_manager.get_timers(user_id)
+        assert "error" in timers or timers.get('timer_type') is None
+
+    @pytest.mark.asyncio
+    async def test_status_distinction(self, queue_manager):
+        """Test la distinction entre les statuts None et disconnected."""
+        new_user = "new_user"
+        known_user = "known_user"
+        
+        # Simuler un utilisateur connu en l'ajoutant à accounts_queue
+        await queue_manager.redis.sadd('accounts_queue', known_user)
+        
+        # Vérifier les statuts
+        new_status = await queue_manager.get_user_status(new_user)
+        known_status = await queue_manager.get_user_status(known_user)
+        
+        assert new_status["status"] == None  # Jamais vu auparavant
+        assert known_status["status"] == "disconnected"  # Déjà vu mais déconnecté
 
 class MockRedis:
     def __init__(self):

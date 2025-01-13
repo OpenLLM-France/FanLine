@@ -63,17 +63,19 @@ os.environ['TESTING'] = 'true'
 def celery_config():
     """Configure Celery pour les tests."""
     config = {
-        'broker_url': 'redis://redis-test:6379/1',
-        'result_backend': 'redis://redis-test:6379/1',
-        'task_always_eager': True,  # Forcer le mode eager pour les tests
-        'task_eager_propagates': True,
+        'broker_url': 'redis://localhost:6379/0',
+        'result_backend': 'redis://localhost:6379/0',
+        'task_always_eager': False,  # Désactiver le mode eager pour les tests de stress
+        'task_eager_propagates': False,
         'worker_prefetch_multiplier': 1,
         'task_acks_late': False,
         'task_track_started': True,
         'task_send_sent_event': True,
         'task_remote_tracebacks': True,
         'task_store_errors_even_if_ignored': True,
-        'task_ignore_result': False
+        'task_ignore_result': False,
+        'broker_connection_retry': True,  # Activer les retry
+        'broker_connection_max_retries': None  # Retry indéfiniment
     }
     
     # Appliquer la configuration immédiatement
@@ -128,6 +130,8 @@ async def redis_client(test_logger):
             db=int(os.getenv('REDIS_DB', 0)),
             decode_responses=True
         )
+        test_logger.debug(f"Configuration Redis: host={os.getenv('REDIS_HOST', 'localhost')}, port={os.getenv('REDIS_PORT', 6379)}, db={os.getenv('REDIS_DB', 0)}")
+        
         await redis.ping()  # Vérifier la connexion
         test_logger.info("Connexion Redis établie avec succès")
         
@@ -148,12 +152,22 @@ async def queue_manager(redis_client, test_logger):
     test_logger.debug("Initialisation du QueueManager")
     try:
         manager = QueueManager(redis_client)
+        test_logger.debug("QueueManager créé avec succès")
+        
         # Vérifier si initialize existe, sinon on retourne directement le manager
         if hasattr(manager, 'initialize'):
             test_logger.debug("Appel de la méthode initialize")
             await manager.initialize()
+            test_logger.debug("Méthode initialize terminée avec succès")
+        
         test_logger.info("QueueManager initialisé avec succès")
-        yield manager  # Utiliser yield au lieu de return pour les fixtures async
+        yield manager
+        
+        test_logger.debug("Nettoyage du QueueManager")
+        if hasattr(manager, 'cleanup'):
+            await manager.cleanup()
+            test_logger.debug("Méthode cleanup terminée avec succès")
+            
     except Exception as e:
         test_logger.error(f"Erreur lors de l'initialisation du QueueManager: {str(e)}")
         raise
@@ -162,11 +176,42 @@ async def queue_manager(redis_client, test_logger):
 async def test_client(redis_client, queue_manager, test_logger):
     test_logger.debug("Initialisation du client de test")
     try:
+        # Configuration de l'état de l'application
+        test_logger.debug("Configuration de l'état de l'application")
         app.state.redis = redis_client
         app.state.queue_manager = queue_manager
-        async with AsyncClient(app=app, base_url="http://test") as client:
+
+        # Configuration de l'URL de base
+        base_url = os.getenv("TEST_API_URL", "http://localhost:8000")
+        test_logger.info(f"Utilisation de l'URL de base: {base_url}")
+        
+        # Test de connexion à l'API avant de créer le client
+        test_logger.debug("Test de connexion à l'API...")
+        import httpx
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{base_url}/health")
+                test_logger.info(f"Test de connexion API: status={response.status_code}")
+        except Exception as e:
+            test_logger.error(f"Erreur lors du test de connexion API: {str(e)}")
+        
+        # Création du client de test
+        test_logger.debug("Création du client de test AsyncClient")
+        async with AsyncClient(app=app, base_url=base_url) as client:
             test_logger.info("Client de test initialisé avec succès")
+            
+            # Test du client
+            test_logger.debug("Test du client avec /health")
+            try:
+                response = await client.get("/health")
+                test_logger.info(f"Test du client: status={response.status_code}, body={response.text}")
+            except Exception as e:
+                test_logger.error(f"Erreur lors du test du client: {str(e)}")
+            
             yield client
+            
+            test_logger.debug("Fermeture du client de test")
+            
     except Exception as e:
         test_logger.error(f"Erreur lors de l'initialisation du client de test: {str(e)}")
         raise
@@ -195,3 +240,58 @@ async def queue_manager_with_checker(queue_manager, test_logger):
         except Exception as e:
             test_logger.error(f"Erreur lors de l'arrêt du slot checker: {str(e)}")
         # Ne pas relever l'exception pendant le nettoyage 
+
+pytest_plugins = ["pytest_asyncio"]
+
+@pytest.fixture
+def event_loop():
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close() 
+
+@pytest.fixture
+async def queue_test_helper(test_client, test_logger):
+    """Helper pour tester les endpoints de la file d'attente."""
+    class QueueTestHelper:
+        def __init__(self, client, logger):
+            self.client = client
+            self.logger = logger
+            
+        async def test_endpoints(self):
+            """Teste tous les endpoints principaux de la file d'attente."""
+            endpoints = [
+                ("/health", "GET"),
+                ("/queue/metrics", "GET"),
+                ("/queue/status/test_user", "GET"),
+                ("/queue/join/test_user", "POST")
+            ]
+            
+            results = []
+            for endpoint, method in endpoints:
+                try:
+                    self.logger.debug(f"Test de l'endpoint {method} {endpoint}")
+                    if method == "GET":
+                        response = await self.client.get(endpoint)
+                    else:
+                        response = await self.client.post(endpoint)
+                    
+                    self.logger.info(f"Réponse de {endpoint}: status={response.status_code}, body={response.text}")
+                    results.append({
+                        "endpoint": endpoint,
+                        "method": method,
+                        "status": response.status_code,
+                        "body": response.text
+                    })
+                except Exception as e:
+                    self.logger.error(f"Erreur lors du test de {endpoint}: {str(e)}")
+                    results.append({
+                        "endpoint": endpoint,
+                        "method": method,
+                        "error": str(e)
+                    })
+            
+            return results
+            
+    helper = QueueTestHelper(test_client, test_logger)
+    test_logger.info("Helper de test de file d'attente initialisé")
+    return helper 

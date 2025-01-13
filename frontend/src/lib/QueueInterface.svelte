@@ -160,65 +160,40 @@
         <h1 class="text-2xl font-bold mb-4 text-center">File d'attente</h1>
         
         {#if error}
-            <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
+            <div data-testid="error-message" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
                 <span class="block sm:inline">{error}</span>
             </div>
         {/if}
 
         {#if status === 'testing'}
-            <div class="mb-4">
-                <h2 class="text-lg font-semibold mb-2">Test des endpoints</h2>
-                <ul class="list-disc list-inside">
-                    {#each testProgress as progress}
-                        <li>{progress}</li>
+            <div data-testid="test-screen">
+                <h2>Test des endpoints</h2>
+                <div data-testid="test-progress">
+                    {#each testProgress as message}
+                        <div data-testid="test-message">{message}</div>
                     {/each}
-                </ul>
+                </div>
             </div>
         {:else if status === 'disconnected'}
-            <button 
-                class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded w-full"
-                on:click={handleJoinQueue}
-            >
-                Rejoindre la file
-            </button>
+            <div data-testid="queue-screen">
+                <button on:click={handleJoinQueue}>Rejoindre la file</button>
+            </div>
         {:else if status === 'waiting'}
-            <div class="mb-4">
-                <p class="text-lg">Position dans la file : {position}</p>
+            <div data-testid="waiting-screen">
+                <p>Position dans la file : {position}</p>
+                <button on:click={handleLeaveQueue}>Quitter la file</button>
             </div>
-            <button 
-                class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded w-full"
-                on:click={handleLeaveQueue}
-            >
-                Quitter la file
-            </button>
         {:else if status === 'draft'}
-            <div class="mb-4">
-                <p class="text-lg">Temps restant pour confirmer : {draftTimer}s</p>
-            </div>
-            <div class="flex space-x-2">
-                <button 
-                    class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded flex-1"
-                    on:click={handleConfirmConnection}
-                >
-                    Confirmer la connexion
-                </button>
-                <button 
-                    class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded flex-1"
-                    on:click={handleLeaveQueue}
-                >
-                    Refuser
-                </button>
+            <div data-testid="draft-screen">
+                <p>Temps restant : {draftTimer}s</p>
+                <button on:click={handleConfirmConnection}>Confirmer la connexion</button>
+                <button on:click={handleLeaveQueue}>Quitter la file</button>
             </div>
         {:else if status === 'connected'}
-            <div class="mb-4">
-                <p class="text-lg">Temps de session restant : {sessionTimer}s</p>
+            <div data-testid="connected-screen">
+                <p>Temps de session restant : {sessionTimer}s</p>
+                <button on:click={handleLeaveQueue}>Terminer la session</button>
             </div>
-            <button 
-                class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded w-full"
-                on:click={handleLeaveQueue}
-            >
-                Terminer la session
-            </button>
         {/if}
     </div>
 </div>

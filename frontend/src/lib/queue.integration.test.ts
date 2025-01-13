@@ -21,14 +21,19 @@ describe('Queue API Integration Tests', () => {
     describe('joinQueue', () => {
         it('devrait rejoindre la file avec succès', async () => {
             const result = await joinQueue(userRequest);
-            expect(result).toHaveProperty('position');
-            expect(typeof result.position).toBe('number');
+            expect(result).toHaveProperty('last_status');
+            expect(result).toHaveProperty('last_position');
+            expect(result).toHaveProperty('commit_status');
+            expect(result).toHaveProperty('commit_position');
+            expect(result.commit_status).toBe('waiting');
+            expect(typeof result.commit_position).toBe('number');
         });
 
         it('devrait gérer les erreurs', async () => {
             // Simuler un utilisateur déjà dans la file
             await redisClient.SADD('queued_users', userId);
-            await expect(joinQueue(userRequest)).rejects.toThrow();
+            await redisClient.RPUSH('waiting_queue', userId);
+            await expect(joinQueue(userRequest)).rejects.toThrow("Utilisateur déjà dans la file d'attente");
         });
     });
 
@@ -47,6 +52,8 @@ describe('Queue API Integration Tests', () => {
             expect(typeof result.remaining_time).toBe('number');
             expect(result).toHaveProperty('estimated_wait_time');
             expect(typeof result.estimated_wait_time).toBe('number');
+            expect(result).toHaveProperty('timestamp');
+            expect(typeof result.timestamp).toBe('string');
         });
     });
 
@@ -60,9 +67,11 @@ describe('Queue API Integration Tests', () => {
             expect(result).toHaveProperty('timer_type');
             expect(result).toHaveProperty('ttl');
             expect(result).toHaveProperty('total_duration');
+            expect(result).toHaveProperty('channel');
             expect(result.timer_type).toBe('draft');
             expect(typeof result.ttl).toBe('number');
             expect(typeof result.total_duration).toBe('number');
+            expect(typeof result.channel).toBe('string');
         });
 
         it('devrait recevoir les messages de mise à jour des timers', async () => {
@@ -71,7 +80,7 @@ describe('Queue API Integration Tests', () => {
             await subscriberClient.connect();
             
             const messages: string[] = [];
-            await subscriberClient.subscribe('timer_updates', (message: string) => {
+            await subscriberClient.subscribe(`timer:channel:${userId}`, (message: string) => {
                 messages.push(message);
                 console.log('Message reçu:', message);
             });
@@ -131,7 +140,7 @@ describe('Queue API Integration Tests', () => {
             }
 
             // Nettoyage
-            await subscriberClient.unsubscribe('timer_updates');
+            await subscriberClient.unsubscribe(`timer:channel:${userId}`);
             await subscriberClient.quit();
         }, 30000);
     });
@@ -145,6 +154,8 @@ describe('Queue API Integration Tests', () => {
             const result = await confirmConnection(userRequest);
             expect(result).toHaveProperty('session_duration');
             expect(typeof result.session_duration).toBe('number');
+            expect(result).toHaveProperty('total_duration');
+            expect(typeof result.total_duration).toBe('number');
         });
     });
 

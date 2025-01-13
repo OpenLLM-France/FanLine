@@ -12,9 +12,10 @@ import datetime
 celery = Celery('queue_manager')
 
 logger = logging.getLogger('test_logger')
+logger.setLevel(logging.DEBUG)
 
 # Récupération des variables d'environnement Redis
-REDIS_HOST = os.getenv('REDIS_HOST', 'redis-test')  # Valeur par défaut pour Docker
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')  # localhost en local
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))     # Port interne Redis
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
 
@@ -22,8 +23,8 @@ REDIS_DB = int(os.getenv('REDIS_DB', 0))
 celery.conf.update(
     broker_url=f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}',
     result_backend=f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}',
-    broker_connection_retry=False,
-    broker_connection_max_retries=0,
+    broker_connection_retry=True,  # Activer les retry
+    broker_connection_max_retries=None,  # Retry indéfiniment
     task_serializer='json',
     accept_content=['json'],
     result_serializer='json',
@@ -57,15 +58,26 @@ logger.info(f"Mode Celery au démarrage: EAGER={celery.conf.task_always_eager}")
 class QueueManager:
     """Gestionnaire de file d'attente avec Redis."""
 
-    def __init__(self, redis):
+    def __init__(self, redis: Redis):
+        """Initialise le gestionnaire de file d'attente.
+
+        Args:
+            redis (Redis): Le client Redis à utiliser
+        """
         self.redis = redis
-        self.max_active_users = int(os.getenv('MAX_ACTIVE_USERS', 50))
-        self.session_duration = int(os.getenv('SESSION_DURATION', 1200))
-        self.draft_duration = int(os.getenv('DRAFT_DURATION', 300))
+        self.max_active_users = 10  # Valeur par défaut
         self._slot_check_task = None
         self._stop_slot_check = False
+        self.draft_duration = 60  # Durée du draft en secondes
+        self.session_duration = 300  # Durée de la session en secondes
+        self._slot_check_interval = 1.0  # Intervalle de vérification des slots en secondes
+        self._timer_tasks = {}  # Pour stocker les tâches de timer par user_id
         self.connection_manager = None
-        logger.debug(f"QueueManager initialisé avec max_active_users={self.max_active_users}")
+        
+        # Configurations
+        self.max_active_users = int(os.getenv('MAX_ACTIVE_USERS', 2))
+        self.draft_duration = int(os.getenv('DRAFT_DURATION', 300))  # 5 minutes
+        self.session_duration = int(os.getenv('SESSION_DURATION', 1200))  # 20 minutes
 
     def set_connection_manager(self, manager):
         """Définit le gestionnaire de connexions WebSocket."""
@@ -80,42 +92,29 @@ class QueueManager:
                 "updates_left": 3  # Pour compatibilité avec l'ancien format
             })
 
-    async def _verify_queue_state(self, user_id: str, expected_states) -> bool:
-        """Vérifie l'état de la file d'attente pour un utilisateur.
-        
-        Args:
-            user_id: L'identifiant de l'utilisateur
-            expected_states: Soit un dictionnaire d'états attendus, soit une liste de dictionnaires d'états possibles.
-                Chaque état peut contenir soit un booléen soit une liste de booléens.
-                Par exemple: 
-                - {'in_queue': True} 
-                - {'in_queue': [True, False]}
-                - [{'in_queue': True, 'in_draft': False}, {'in_queue': False, 'in_draft': True}]
-        """
+    async def _verify_queue_state(self, user_id: str, expected_states, message: str = "") -> bool:
+        """Vérifie l'état de la file d'attente pour un utilisateur."""
         try:
             logger.debug(f"Vérification de l'état pour {user_id} avec attentes: {expected_states}")
-            
+            logger.debug(f"Message: {message}")
             # Convertir en liste si c'est un dictionnaire unique
             if isinstance(expected_states, dict):
                 expected_states = [expected_states]
                 
             async with self.redis.pipeline(transaction=True) as pipe:
-                pipe.sismember('queued_users', user_id)
-                pipe.lrange('waiting_queue', 0, -1)  # Récupérer toute la liste
+                pipe.sismember('queued_users', user_id)  # Utiliser queued_users pour vérifier la présence
+                pipe.sismember('queued_users', user_id)  # in_waiting est le même que in_queue
                 pipe.sismember('draft_users', user_id)
                 pipe.sismember('active_users', user_id)
+                pipe.sismember('accounts_queue', user_id)
                 results = await pipe.execute()
                 
-                is_queued = bool(results[0])
-                waiting_list = results[1]
-                is_draft = bool(results[2])
-                is_active = bool(results[3])
-                
                 actual_state = {
-                    'in_queue': is_queued,
-                    'in_waiting': user_id in waiting_list,
-                    'in_draft': is_draft,
-                    'in_active': is_active
+                    'in_queue': bool(results[0]),
+                    'in_waiting': bool(results[1]),  # Même état que in_queue
+                    'in_draft': bool(results[2]),
+                    'in_active': bool(results[3]),
+                    'in_accounts_queue': bool(results[4])
                 }
                 
                 logger.debug(f"État actuel pour {user_id}: {actual_state}")
@@ -147,29 +146,57 @@ class QueueManager:
     async def _check_slots_after_add(self):
         """Vérifie les slots disponibles de manière asynchrone."""
         try:
+            # Récupérer d'abord toute la waiting queue
+            waiting_queue = await self.redis.lrange('waiting_queue', 0, -1)
+            if not waiting_queue:
+                return True
 
-            active_count = await self.redis.scard('active_users')
-            draft_count = await self.redis.scard('draft_users')
+            # Vérifier les slots disponibles
+            async with self.redis.pipeline(transaction=True) as pipe:
+                pipe.scard('active_users')
+                pipe.scard('draft_users')
+                results = await pipe.execute()
+                
+            active_count, draft_count = results
             available_slots = self.max_active_users - (active_count + draft_count)
 
             if available_slots > 0:
-
-                users = await self.redis.lrange('waiting_queue', 0, available_slots - 1)
-                for user_id in users:
-
-                    is_queued = await self.redis.sismember('queued_users', user_id)
+                # Prendre seulement le nombre d'utilisateurs nécessaire
+                users_to_check = waiting_queue[:available_slots]
+                
+                # Vérifier les utilisateurs en attente en une seule fois
+                async with self.redis.pipeline(transaction=True) as pipe:
+                    for user_id in users_to_check:
+                        pipe.sismember('queued_users', user_id)
+                    is_queued_results = await pipe.execute()
+                
+                # Offrir des slots aux utilisateurs éligibles
+                for i, is_queued in enumerate(is_queued_results):
                     if is_queued:
-                        await self.offer_slot(user_id)
+                        await self.offer_slot(users_to_check[i])
+            
             return True
+            
         except Exception as e:
-            print(f"❌ Erreur lors de la vérification des slots : {str(e)}")
+            logger.error(f"❌ Erreur lors de la vérification des slots : {str(e)}")
             return False
 
-    async def start_slot_checker(self, check_interval: float = 1.0):
+    async def start_slot_checker(self):
         """Démarre la vérification périodique des slots disponibles."""
-        if self._slot_check_task is None:
+        if not self._slot_check_task:
+            logger.info("🔄 Démarrage du slot checker")
             self._stop_slot_check = False
-            self._slot_check_task = asyncio.create_task(self._periodic_slot_check(check_interval))
+            self._slot_check_task = asyncio.create_task(self._periodic_slot_check())
+            
+    async def _periodic_slot_check(self):
+        """Vérifie périodiquement les slots disponibles."""
+        while not self._stop_slot_check:
+            try:
+                await self.check_available_slots()
+                await asyncio.sleep(1.0)  # Vérifier toutes les secondes au lieu de 5
+            except Exception as e:
+                logger.error(f"❌ Erreur dans le slot checker: {str(e)}")
+                await asyncio.sleep(5.0)  # En cas d'erreur, attendre plus longtemps
 
     async def stop_slot_checker(self):
         """Arrête la vérification périodique des slots."""
@@ -178,86 +205,102 @@ class QueueManager:
             await self._slot_check_task
             self._slot_check_task = None
 
-    async def _periodic_slot_check(self, interval: float):
-        """Vérifie périodiquement les slots disponibles."""
-        while not self._stop_slot_check:
-            try:
-                await self._check_slots_after_add()
-                await asyncio.sleep(interval)
-            except Exception as e:
-                print(f"❌ Erreur dans la vérification périodique des slots : {str(e)}")
-                await asyncio.sleep(interval)  # Continuer malgré l'erreur
-
     async def add_to_queue(self, user_id: str, check_slots: bool = True) -> Dict:
         """Ajoute un utilisateur à la file d'attente principale."""
         try:
-            logger.info(f"Tentative d'ajout de l'utilisateur {user_id}")
+            logger.info(f"🔄 Tentative d'ajout de l'utilisateur {user_id}")
             
             # Obtenir le statut actuel
             last_status = await self.get_user_status(user_id, check_slots=check_slots)
-            logger.info(f"Statut actuel: {last_status}")
+            logger.info(f"📊 Statut actuel pour {user_id}: {last_status}")
             
             # Si l'utilisateur n'existe pas dans Redis
+            current_state = await self._get_current_state(user_id)
+            logger.info(f"🔍 État actuel pour {user_id}: {current_state}")
+            
             if await self._verify_queue_state(user_id, {
                 'in_queue': False,
                 'in_waiting': False,
                 'in_draft': False,
-                'in_active': False
+                'in_active': False,
+                'in_accounts_queue': [False, True]
             }):
-                logger.debug(f"Nouvel utilisateur détecté")
+                logger.debug(f"✨ Nouvel utilisateur détecté: {user_id}")
                 last_status = {"status": None, "position": None}
             
             # Si l'utilisateur est déconnecté ou n'a pas de statut
             if last_status["status"] in [None, 'disconnected']:
-                logger.info(f"Tentative d'ajout à la file d'attente pour {user_id} avec statut {last_status['status']}")
+                logger.info(f"➡️ Ajout à la file d'attente pour {user_id} avec statut {last_status['status']}")
                 async with self.redis.pipeline(transaction=True) as pipe:
-                    logger.debug("Début transaction Redis")
-                    # Ajouter à la file d'attente
-                    pipe.rpush('waiting_queue', user_id)
+                    logger.debug(f"🔒 Début transaction Redis pour {user_id}")
+                    # Ajouter à la file d'attente et à accounts_queue
+                    pipe.rpush('waiting_queue', user_id)  # Utiliser rpush pour garder l'ordre FIFO
                     pipe.sadd('queued_users', user_id)
-                    pipe.llen('waiting_queue')
+                    pipe.sadd('accounts_queue', user_id)
+                    pipe.llen('waiting_queue')  # Utiliser llen pour avoir la position
                     results = await pipe.execute()
-                    logger.info(f"Résultats de la transaction Redis pour {user_id}: {results}")
+                    logger.info(f"📝 Résultats de la transaction Redis pour {user_id}: {results}")
                     position = results[-1]
-                    logger.debug(f"Position: {position}")
+                    logger.debug(f"📍 Position pour {user_id}: {position}")
                     
                     # Vérification immédiate post-transaction
                     is_queued = await self.redis.sismember('queued_users', user_id)
                     is_in_waiting = await self.redis.lpos('waiting_queue', user_id) is not None
-                    logger.info(f"Vérification post-transaction pour {user_id}: queued={is_queued}, in_waiting={is_in_waiting}")
+                    logger.info(f"✅ Vérification post-transaction pour {user_id}: queued={is_queued}, in_waiting={is_in_waiting}")
 
                     if not (is_queued and is_in_waiting):
                         logger.error(f"❌ Échec de l'ajout à la file d'attente pour {user_id}")
                         raise Exception("Échec de l'ajout à la file d'attente")
                     
-                    # Vérifier l'état après l'ajout - permettre plusieurs états possibles
+                    # Vérifier l'état après l'ajout
+                    new_state = await self._get_current_state(user_id)
+                    logger.info(f"🔄 Nouvel état pour {user_id}: {new_state}")
+                    
                     expected_states = [
                         # État 1: En attente dans la file
                         {
                             'in_queue': True,
                             'in_waiting': True,
                             'in_draft': False,
-                            'in_active': False
+                            'in_active': False,
+                            'in_accounts_queue': [True, False]
                         }
                     ]
-                    if not await self._verify_queue_state(user_id, expected_states):
-                        logger.error("État incohérent après l'ajout")
-                        raise Exception("État incohérent après l'ajout à la file")
                     
-                    # Obtenir le nouveau statut après l'ajout
-                    new_status = await self.get_user_status(user_id, check_slots=check_slots)
+                    if not await self._verify_queue_state(user_id, expected_states):
+                        logger.error(f"❌ État incohérent après l'ajout pour {user_id}")
+                        logger.error(f"État attendu: {expected_states}")
+                        logger.error(f"État actuel: {new_state}")
+                        raise Exception("État incohérent après l'ajout à la file")
                     
                     # Vérifier les slots disponibles si demandé
                     if check_slots:
                         await self._check_slots_after_add()
+                    # Afficher l'état de la liste d'attente et de la draft
+                    async with self.redis.pipeline(transaction=True) as pipe:
+                        pipe.llen('waiting_queue')  # Taille de la liste d'attente
+                        pipe.scard('draft_users')  # Nombre d'utilisateurs en draft
+                        results = await pipe.execute()
+                        waiting_queue_size = results[0]
+                        draft_users_count = results[1]
+                        logger.info(f"État actuel: Liste d'attente - {waiting_queue_size} utilisateurs, Draft - {draft_users_count} utilisateurs")
+                    # Obtenir le nouveau statut après l'ajout et la vérification des slots
+                    new_status = await self.get_user_status(user_id, check_slots=check_slots)
                     
-                    # Retourner la position réelle dans la file
-                    waiting_pos = await self.redis.lpos('waiting_queue', user_id)
-                    if waiting_pos is not None:
-                        position = waiting_pos + 1
+                    # Vérifier si l'utilisateur est passé en draft
+                    is_draft = await self.redis.sismember('draft_users', user_id)
+                    if is_draft:
+                        new_status["status"] = "draft"
+                        position = -1
                     else:
-                        position = new_status.get("position", None)
+                        # Retourner la position réelle dans la file
+                        waiting_pos = await self.redis.lpos('waiting_queue', user_id)
+                        if waiting_pos is not None:
+                            position = waiting_pos + 1
+                        else:
+                            position = new_status.get("position", None)
                     
+                    logger.info(f"✅ Ajout réussi pour {user_id} - Status: {new_status['status']}, Position: {position}")
                     return {
                         "last_status": last_status["status"],
                         "last_position": last_status.get("position", None),
@@ -266,6 +309,7 @@ class QueueManager:
                     }
             
             # Pour tous les autres cas, retourner le statut actuel
+            logger.info(f"ℹ️ Retour du statut actuel pour {user_id}: {last_status}")
             return {
                 "last_status": last_status["status"],
                 "last_position": last_status.get("position", None),
@@ -274,12 +318,13 @@ class QueueManager:
             }
                 
         except Exception as e:
-            logger.error(f"Erreur lors de l'ajout à la file : {str(e)}")
+            logger.error(f"❌ Erreur lors de l'ajout à la file pour {user_id}: {str(e)}")
+            logger.error(f"État actuel lors de l'erreur: {await self._get_current_state(user_id)}")
             
             # Nettoyage en cas d'erreur
             async with self.redis.pipeline(transaction=True) as pipe:
-                logger.debug("Nettoyage après erreur")
-                pipe.lrem('waiting_queue', 0, user_id)
+                logger.debug(f"🧹 Nettoyage après erreur pour {user_id}")
+                pipe.lrem('waiting_queue', 0, user_id)  # Utiliser lrem pour la liste
                 pipe.srem('queued_users', user_id)
                 await pipe.execute()
                 
@@ -290,14 +335,49 @@ class QueueManager:
                 "commit_position": None
             }
 
+    async def _get_current_state(self, user_id: str) -> Dict[str, bool]:
+        """Récupère l'état actuel d'un utilisateur dans toutes les files."""
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.sismember('queued_users', user_id)
+            pipe.lpos('waiting_queue', user_id)
+            pipe.sismember('draft_users', user_id)
+            pipe.sismember('active_users', user_id)
+            pipe.sismember('accounts_queue', user_id)
+            results = await pipe.execute()
+            
+        return {
+            'in_queue': results[0],
+            'in_waiting': results[1] is not None,
+            'in_draft': results[2],
+            'in_active': results[3],
+            'in_accounts_queue': results[4]
+        }
+
     async def remove_from_queue(self, user_id: str) -> bool:
         """Retire un utilisateur de la file d'attente."""
         try:
             is_queued = await self.redis.sismember('queued_users', user_id)
-            if is_queued:
+            is_draft = await self.redis.sismember('draft_users', user_id)
+            is_active = await self.redis.sismember('active_users', user_id)
+            
+            if is_queued or is_draft or is_active:
                 async with self.redis.pipeline(transaction=True) as pipe:
-                    pipe.lrem('waiting_queue', 0, user_id)
-                    pipe.srem('queued_users', user_id)
+                    if is_queued:
+                        pipe.lrem('waiting_queue', 0, user_id)  # Retirer de la liste d'attente
+                        pipe.srem('queued_users', user_id)  # Retirer de l'ensemble des utilisateurs en attente
+                    if is_draft:
+                        pipe.srem('draft_users', user_id)
+                        pipe.delete(f'draft:{user_id}')
+                    if is_active:
+                        pipe.srem('active_users', user_id)
+                        pipe.delete(f'session:{user_id}')
+                    pipe.publish(f'queue_status:{user_id}', 
+                        json.dumps({
+                            "status": "disconnected",
+                            "position": None,
+                            "timestamp": int(time.time())
+                        })
+                    )
                     await pipe.execute()
                     
                     # Vérifier l'état après suppression
@@ -305,9 +385,11 @@ class QueueManager:
                         'in_queue': False,
                         'in_waiting': False,
                         'in_draft': False,
-                        'in_active': False
+                        'in_active': False,
+                        'in_accounts_queue': True  # L'utilisateur doit rester dans accounts_queue
                     }
-                    if not await self._verify_queue_state(user_id, expected_state):
+                    logger.debug(f"Vérification de l'état après suppression pour {user_id}: {expected_state}")
+                    if not await self._verify_queue_state(user_id, expected_state, message="iciiiiii"):
                         raise Exception("État incohérent après la suppression")
                     
                     # Vérifier les slots disponibles
@@ -321,169 +403,301 @@ class QueueManager:
 
     async def check_available_slots(self):
         """Vérifie et attribue les slots disponibles."""
-        active_count = await self.redis.scard('active_users')
-        draft_count = await self.redis.scard('draft_users')
-        available_slots = self.max_active_users - (active_count + draft_count)
-
-        if available_slots > 0:
-            for _ in range(available_slots):
-                user_id = await self.redis.lindex('waiting_queue', 0)
-                if user_id:
-                    await self.offer_slot(user_id)
-
-    async def offer_slot(self, user_id: str):
-        """Offre un slot à un utilisateur."""
         try:
-            logger.info(f"Tentative d'offre de slot à {user_id}")
-            
-            # Vérifier l'état actuel en une seule transaction
+            # Vérifier d'abord les slots disponibles
             async with self.redis.pipeline(transaction=True) as pipe:
-                pipe.sismember('queued_users', user_id)
-                pipe.lpos('waiting_queue', user_id)
-                pipe.sismember('draft_users', user_id)
-                pipe.sismember('active_users', user_id)
+                pipe.scard('active_users')
+                pipe.scard('draft_users')
                 results = await pipe.execute()
                 
-                is_queued, position, is_draft, is_active = results
-                if is_draft or is_active:
-                    logger.info(f"État invalide pour {user_id}: déjà en draft ou actif")
+                active_count, draft_count = results
+                available_slots = self.max_active_users - (active_count + draft_count)
+            
+            logger.debug(f"Slots disponibles: {available_slots} (actifs: {active_count}, draft: {draft_count})")
+            
+            if available_slots <= 0:
+                logger.info("ℹ️ Plus aucun slot disponible")
+                return True
+
+            # Récupérer et traiter les utilisateurs un par un
+            while available_slots > 0:
+                # Prendre le premier utilisateur
+                user_id = await self.redis.lpop('waiting_queue')
+                if not user_id:
+                    logger.debug("Plus d'utilisateurs en attente")
+                    break
+                    
+                user_id = user_id.decode('utf-8')
+                logger.debug(f"Traitement de l'utilisateur {user_id}")
+                
+                # Vérifier l'éligibilité
+                async with self.redis.pipeline(transaction=True) as pipe:
+                    pipe.sismember('queued_users', user_id)
+                    pipe.sismember('active_users', user_id)
+                    pipe.sismember('draft_users', user_id)
+                    results = await pipe.execute()
+                
+                is_queued, is_active, is_draft = results
+                logger.debug(f"État de {user_id} - queued: {is_queued}, active: {is_active}, draft: {is_draft}")
+                
+                if is_queued and not (is_active or is_draft):
+                    # Offrir un slot
+                    logger.info(f"Tentative d'offre de slot à {user_id}")
+                    success = await self.offer_slot(user_id)
+                    if success:
+                        logger.info(f"✅ Slot offert avec succès à {user_id}")
+                        available_slots -= 1
+                    else:
+                        # Si l'offre échoue, remettre l'utilisateur à la fin de la file
+                        logger.warning(f"❌ Échec de l'offre de slot pour {user_id}, remise en file")
+                        await self.redis.rpush('waiting_queue', user_id)
+                else:
+                    # Si l'utilisateur n'est pas éligible, le retirer de queued_users
+                    logger.warning(f"⚠️ Utilisateur {user_id} non éligible (queued={is_queued}, active={is_active}, draft={is_draft})")
+                    if is_queued:
+                        await self.redis.srem('queued_users', user_id)
+                        
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la vérification des slots : {str(e)}")
+            return False
+
+    async def offer_slot(self, user_id: str, max_retries: int = 3) -> bool:
+        """Offre un slot à un utilisateur."""
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                logger.debug(f"Tentative {retry_count + 1}/{max_retries} d'offre de slot à {user_id}")
+                
+                # Vérifier l'état actuel
+                async with self.redis.pipeline(transaction=True) as pipe:
+                    pipe.sismember('queued_users', user_id)
+                    pipe.sismember('active_users', user_id)
+                    pipe.sismember('draft_users', user_id)
+                    pipe.lpos('waiting_queue', user_id)
+                    results = await pipe.execute()
+                
+                is_queued, is_active, is_draft, waiting_pos = results
+                logger.debug(f"État actuel de {user_id} - queued: {is_queued}, active: {is_active}, draft: {is_draft}, waiting_pos: {waiting_pos}")
+                
+                if not is_queued or is_active or is_draft:
+                    logger.warning(f"État invalide pour {user_id} - queued: {is_queued}, active: {is_active}, draft: {is_draft}")
                     return False
                 
-                if not is_queued or position is None:
-                    logger.warning(f"Utilisateur {user_id} non éligible pour un slot (queued={is_queued}, pos={position})")
-                    return False
-                    
-
-                # Effectuer la transition en une seule transaction
+                # Vérifier les slots disponibles
                 async with self.redis.pipeline(transaction=True) as pipe:
-                    pipe.lrem('waiting_queue', 0, user_id)
+                    pipe.scard('active_users')
+                    pipe.scard('draft_users')
+                    results = await pipe.execute()
+                    
+                active_count, draft_count = results
+                if active_count + draft_count >= self.max_active_users:
+                    logger.warning(f"Plus de slots disponibles - actifs: {active_count}, draft: {draft_count}")
+                    return False
+
+                # Effectuer la transition atomique
+                async with self.redis.pipeline(transaction=True) as pipe:
+                    logger.debug(f"Début de la transition pour {user_id}")
+                    # Vérifier à nouveau l'état avant la transition
+                    pipe.sismember('queued_users', user_id)
+                    pipe.sismember('active_users', user_id)
+                    pipe.sismember('draft_users', user_id)
+                    pipe.lpos('waiting_queue', user_id)
+                    # Effectuer la transition
                     pipe.srem('queued_users', user_id)
                     pipe.sadd('draft_users', user_id)
                     pipe.setex(f'draft:{user_id}', self.draft_duration, '1')
-                    await pipe.execute()
+                    pipe.lrem('waiting_queue', 0, user_id)  # Retirer de la waiting_queue
+                    results = await pipe.execute()
                     
-                # Vérifier l'état après la transition
-                expected_state = {
-                    'in_queue': False,
-                    'in_waiting': False,
-                    'in_draft': True,
-                    'in_active': False
-                }
-                if not await self._verify_queue_state(user_id, expected_state):
-                    raise Exception("État incohérent après l'offre du slot")
+                    # Vérifier les résultats
+                    pre_queued, pre_active, pre_draft, pre_waiting = results[:4]
+                    transition_results = results[4:]
+                    
+                    if not pre_queued or pre_active or pre_draft or pre_waiting is None:
+                        logger.error(f"État invalide avant transition - queued: {pre_queued}, active: {pre_active}, draft: {pre_draft}, waiting: {pre_waiting}")
+                        return False
+                    
+                    if not all(transition_results):
+                        logger.error(f"Échec de la transition pour {user_id} - résultats: {transition_results}")
+                        return False
+                    
+                    logger.debug(f"Transition réussie pour {user_id}")
                 
-                # Publier la notification
-                await self.redis.publish(f'queue_status:{user_id}', 
-                    json.dumps({
-                        "status": "draft",
-                        "duration": self.draft_duration
-                    })
-                )
-                # Ajouter le nouveau statut dans l'historique
-                await self.redis.rpush(f'status_history:{user_id}', json.dumps({
-                    "status": "draft",
-                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                }))
-                
-                # Mettre à jour le dernier statut
-                await self.redis.set(f'last_status:{user_id}', "draft")
-                logger.info(f"Slot offert avec succès à {user_id}")
-                return True
-                
-        except Exception as e:
-            logger.error(f"Erreur lors de l'offre du slot à {user_id}: {str(e)}")
-            # Nettoyage en cas d'erreur
-            async with self.redis.pipeline(transaction=True) as pipe:
-                pipe.srem('draft_users', user_id)
-                pipe.delete(f'draft:{user_id}')
-                await pipe.execute()
-            return False
-
-    async def confirm_connection(self, user_id: str) -> bool:
-        """Confirme la connexion d'un utilisateur."""
-        try:
-            # Vérifier l'état actuel en une seule transaction
-            async with self.redis.pipeline(transaction=True) as pipe:
-                pipe.sismember('draft_users', user_id)
-                pipe.exists(f'draft:{user_id}')
-                pipe.sismember('active_users', user_id)
-                pipe.sismember('queued_users', user_id)
-                results = await pipe.execute()
-                
-                is_draft, has_draft, is_active, is_queued = results
-                
-                if not (is_draft and has_draft) or is_active or is_queued:
-                    logger.warning(f"État invalide pour confirmation: draft={is_draft}, has_draft={has_draft}, active={is_active}, queued={is_queued}")
-                    return False
-                
-                # Effectuer la transition en une seule transaction
+                # Vérifier l'état final
                 async with self.redis.pipeline(transaction=True) as pipe:
-                    pipe.srem('draft_users', user_id)
-                    pipe.sadd('active_users', user_id)
-                    pipe.delete(f'draft:{user_id}')
-                    pipe.setex(f'session:{user_id}', self.session_duration, '1')
-                    await pipe.execute()
-                    
-                # Vérifier l'état après la transition
-                expected_state = {
-                    'in_queue': False,
-                    'in_waiting': False,
-                    'in_draft': False,
-                    'in_active': True
-                }
-                if not await self._verify_queue_state(user_id, expected_state):
-                    raise Exception("État incohérent après la confirmation")
+                    pipe.sismember('queued_users', user_id)
+                    pipe.sismember('draft_users', user_id)
+                    pipe.exists(f'draft:{user_id}')
+                    pipe.lpos('waiting_queue', user_id)
+                    results = await pipe.execute()
                 
-                # Publier la notification
-                await self.redis.publish(f'queue_status:{user_id}', 
-                    json.dumps({
-                        "status": "connected",
-                        "session_duration": self.session_duration
-                    })
-                )
-                logger.info(f"Connexion confirmée pour {user_id}")
-                return True
+                final_queued, final_draft, has_draft, final_waiting = results
+                logger.debug(f"État final de {user_id} - queued: {final_queued}, draft: {final_draft}, has_draft: {has_draft}, waiting: {final_waiting}")
                 
-        except Exception as e:
-            logger.error(f"Erreur lors de la confirmation pour {user_id}: {str(e)}")
-            # Nettoyage en cas d'erreur
-            async with self.redis.pipeline(transaction=True) as pipe:
-                pipe.srem('active_users', user_id)
-                pipe.delete(f'session:{user_id}')
-                await pipe.execute()
-            return False
-
-    async def extend_session(self, user_id: str) -> bool:
-        """Prolonge la session d'un utilisateur actif."""
-        try:
-            # Vérifier l'état en une seule transaction
-            async with self.redis.pipeline(transaction=True) as pipe:
-                pipe.sismember('active_users', user_id)
-                pipe.exists(f'session:{user_id}')
-                results = await pipe.execute()
-                
-                is_active, has_session = results
-                
-                if not (is_active and has_session):
-                    logger.warning(f"Session invalide pour {user_id}: active={is_active}, has_session={has_session}")
+                if not final_draft or final_queued or not has_draft or final_waiting is not None:
+                    logger.error(f"État final invalide pour {user_id}")
                     return False
-                
-                # Prolonger la session
-                await self.redis.setex(f'session:{user_id}', self.session_duration, '1')
-                logger.info(f"Session prolongée pour {user_id}")
-                
+
                 # Publier la notification
-                await self.redis.publish(f'queue_status:{user_id}', 
-                    json.dumps({
-                        "status": "extended",
-                        "session_duration": self.session_duration
-                    })
-                )
+                status_info = {
+                    "status": "draft",
+                    "position": -1,
+                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                await self.redis.publish(f'queue_status:{user_id}', json.dumps(status_info))
+                
+                logger.info(f"✅ Slot offert avec succès à {user_id} (timer: {self.draft_duration}s)")
                 return True
                 
-        except Exception as e:
-            logger.error(f"Erreur lors de la prolongation de session pour {user_id}: {str(e)}")
-            return False
+            except Exception as e:
+                retry_count += 1
+                logger.error(f"❌ Tentative {retry_count}/{max_retries} - Erreur lors de l'offre de slot à {user_id}: {str(e)}")
+                if retry_count < max_retries:
+                    await asyncio.sleep(0.5 * retry_count)  # Backoff exponentiel
+                else:
+                    # Nettoyage final en cas d'échec
+                    try:
+                        async with self.redis.pipeline(transaction=True) as pipe:
+                            pipe.srem('draft_users', user_id)
+                            pipe.delete(f'draft:{user_id}')
+                            await pipe.execute()
+                    except Exception as cleanup_error:
+                        logger.error(f"Erreur lors du nettoyage pour {user_id}: {str(cleanup_error)}")
+                    return False
+
+        return False
+
+    async def confirm_connection(self, user_id: str, max_retries: int = 3) -> bool:
+        """Confirme la connexion d'un utilisateur."""
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                # Vérifier l'état actuel en une seule transaction
+                async with self.redis.pipeline(transaction=True) as pipe:
+                    pipe.sismember('draft_users', user_id)
+                    pipe.exists(f'draft:{user_id}')
+                    pipe.sismember('active_users', user_id)
+                    pipe.sismember('queued_users', user_id)
+                    pipe.ttl(f'draft:{user_id}')  # Récupérer le TTL restant
+                    results = await pipe.execute()
+                    
+                    is_draft, has_draft, is_active, is_queued, draft_ttl = results
+                    
+                    if not (is_draft and has_draft):
+                        logger.warning(f"❌ L'utilisateur {user_id} n'est pas en état draft (is_draft={is_draft}, has_draft={has_draft})")
+                        return False
+                        
+                    if is_active or is_queued:
+                        logger.warning(f"⚠️ État invalide pour {user_id}: déjà actif={is_active} ou en file d'attente={is_queued}")
+                        return False
+
+                    if draft_ttl <= 0:
+                        logger.warning(f"⚠️ Le timer draft a expiré pour {user_id} (ttl={draft_ttl})")
+                        return False
+                    
+                    # Effectuer la transition en une seule transaction
+                    async with self.redis.pipeline(transaction=True) as pipe:
+                        pipe.srem('draft_users', user_id)
+                        pipe.sadd('active_users', user_id)
+                        pipe.delete(f'draft:{user_id}')
+                        pipe.setex(f'session:{user_id}', self.session_duration, '1')
+                        # Publier le nouveau timer
+                        pipe.publish('user_status', json.dumps({
+                            'user_id': user_id,
+                            'status': 'active',
+                            'timer': {
+                                'type': 'session',
+                                'duration': self.session_duration,
+                                'timestamp': int(time.time())
+                            }
+                        }))
+                        results = await pipe.execute()
+                        
+                        # Vérifier que toutes les opérations ont réussi
+                        if not all(result is not None for result in results[:-1]):  # Ignore le résultat de publish
+                            raise Exception("Une ou plusieurs opérations ont échoué")
+                        
+                    logger.info(f"✅ Connexion confirmée pour {user_id} (session: {self.session_duration}s)")
+                    return True
+                    
+            except Exception as e:
+                retry_count += 1
+                logger.error(f"QueueManager : ❌ Tentative {retry_count}/{max_retries} - Erreur lors de la confirmation pour {user_id}: {str(e)}")
+                if retry_count < max_retries:
+                    await asyncio.sleep(0.5 * retry_count)  # Backoff exponentiel
+                else:
+                    # Nettoyage en cas d'erreur
+                    try:
+                        async with self.redis.pipeline(transaction=True) as pipe:
+                            pipe.srem('active_users', user_id)
+                            pipe.srem('draft_users', user_id)
+                            pipe.delete(f'session:{user_id}')
+                            pipe.delete(f'draft:{user_id}')
+                            await pipe.execute()
+                    except Exception as cleanup_error:
+                        logger.error(f"Erreur lors du nettoyage pour {user_id}: {str(cleanup_error)}")
+                    return False
+
+        return False
+
+    async def extend_session(self, user_id: str, max_retries: int = 3) -> bool:
+        """Prolonge la session d'un utilisateur actif."""
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                # Vérifier l'état en une seule transaction
+                async with self.redis.pipeline(transaction=True) as pipe:
+                    pipe.sismember('active_users', user_id)
+                    pipe.exists(f'session:{user_id}')
+                    pipe.ttl(f'session:{user_id}')
+                    is_active, has_session, session_ttl = await pipe.execute()
+                    
+                    if not (is_active and has_session):
+                        logger.warning(f"Session invalide pour {user_id}: active={is_active}, has_session={has_session}")
+                        return False
+
+                    if session_ttl <= 0:
+                        logger.warning(f"Session expirée pour {user_id}: ttl={session_ttl}")
+                        return False
+                    
+                    # Prolonger la session
+                    async with self.redis.pipeline(transaction=True) as pipe:
+                        pipe.setex(f'session:{user_id}', self.session_duration, '1')
+                        pipe.publish(f'queue_status:{user_id}', 
+                            json.dumps({
+                                "status": "extended",
+                                "session_duration": self.session_duration,
+                                "timestamp": int(time.time())
+                            })
+                        )
+                        results = await pipe.execute()
+                        
+                        # Vérifier que l'opération a réussi
+                        if not results[0]:
+                            raise Exception("Échec de la prolongation de session")
+                    
+                    logger.info(f"✅ Session prolongée pour {user_id} (nouvelle durée: {self.session_duration}s)")
+                    return True
+                    
+            except Exception as e:
+                retry_count += 1
+                logger.error(f"❌ Tentative {retry_count}/{max_retries} - Erreur lors de la prolongation de session pour {user_id}: {str(e)}")
+                if retry_count < max_retries:
+                    await asyncio.sleep(0.5 * retry_count)  # Backoff exponentiel
+                else:
+                    # Nettoyage en cas d'erreur
+                    try:
+                        async with self.redis.pipeline(transaction=True) as pipe:
+                            pipe.srem('active_users', user_id)
+                            pipe.delete(f'session:{user_id}')
+                            await pipe.execute()
+                    except Exception as cleanup_error:
+                        logger.error(f"Erreur lors du nettoyage pour {user_id}: {str(cleanup_error)}")
+                    return False
+
+        return False
 
     async def get_user_status(self, user_id: str, check_slots: bool = True) -> Dict:
         """Récupère le statut actuel d'un utilisateur."""
@@ -494,11 +708,16 @@ class QueueManager:
                 pipe.sismember('draft_users', user_id)
                 pipe.lpos('waiting_queue', user_id)
                 pipe.sismember('queued_users', user_id)
-                is_active, is_draft, waiting_pos, is_queued = await pipe.execute()
+                pipe.sismember('accounts_queue', user_id)  # Vérifier si l'utilisateur a déjà été connecté
+                is_active, is_draft, waiting_pos, is_queued, has_account = await pipe.execute()
 
-            # Si l'utilisateur n'existe dans aucun état, retourner None
-            if not any([is_active, is_draft, waiting_pos is not None, is_queued]):
+            # Si l'utilisateur n'existe dans aucun état et n'a jamais été connecté, retourner None
+            if not any([is_active, is_draft, waiting_pos is not None, is_queued]) and not has_account:
                 return {"status": None}
+
+            # Si l'utilisateur n'est dans aucun état mais a déjà été connecté
+            if not any([is_active, is_draft, waiting_pos is not None, is_queued]) and has_account:
+                return {"status": "disconnected", "position": None}
 
             # Déterminer le statut en fonction des flags
             if is_active:
@@ -543,7 +762,8 @@ class QueueManager:
             last_status = None
             
             # Vérifier si l'historique des statuts existe déjà
-            if exist:=(await self.redis.exists(f'status_history:{user_id}') == 0):
+            history_exists = await self.redis.exists(f'status_history:{user_id}')
+            if history_exists == 0:
                 logger.info(f"Aucun historique de statuts trouvé pour {user_id}")
             else:
                 # Récupérer le dernier statut stocké
@@ -567,7 +787,7 @@ class QueueManager:
                 await self.redis.publish(f'queue_status:{user_id}', status_json)
             
                 # Garder seulement les 100 derniers statuts
-                if not exist:
+                if history_exists:
                     await self.redis.ltrim(f'status_history:{user_id}', -100, -1)
             
             return status_info
@@ -679,62 +899,130 @@ class QueueManager:
         try:
             logger.info(f"Récupération des timers pour {user_id}")
             
+            # Nettoyer les anciennes tâches si elles existent
+            if user_id in self._timer_tasks and not self._timer_tasks[user_id].done():
+                self._timer_tasks[user_id].cancel()
+            
             # Utiliser une pipeline pour les vérifications atomiques
             async with self.redis.pipeline() as pipe:
                 pipe.sismember('active_users', user_id)
                 pipe.sismember('draft_users', user_id)
                 pipe.ttl(f'session:{user_id}')
                 pipe.ttl(f'draft:{user_id}')
+                
                 is_active, is_draft, session_ttl, draft_ttl = await pipe.execute()
-
-            logger.debug(
-                f"État des timers pour {user_id} - actif: {is_active}, draft: {is_draft}, "
-                f"session_ttl: {session_ttl}, draft_ttl: {draft_ttl}"
-            )
 
             if not is_active and not is_draft:
                 logger.warning(f"Aucun timer actif pour {user_id}")
-                return {}
+                status = await self.get_user_status(user_id)
+                return {"timer_type": None,
+                        'channel': None,
+                        'status': status['status'],
+                        'ttl': 0,
+                        'error': 'no_active_timer',
+                        'task': None
+                        }
 
-            if is_active and session_ttl > 0:
-                # Démarrer la tâche de mise à jour du timer de session
-                update_timer_channel.apply_async(
-                    kwargs={
+            if is_active:
+                session_type = "session"
+                # Vérifier l'expiration avec la fonction existante
+                if await auto_expiration(session_ttl, session_type, user_id):
+                    # Mettre à jour le statut après l'expiration
+                    status = await self.get_user_status(user_id)
+                    return {
+                        'timer_type': session_type,
+                        'ttl': 0,
                         'channel': f'timer:channel:{user_id}',
-                        'initial_ttl': session_ttl,
-                        'timer_type': 'session',
-                        'max_updates': 3
-                    },
-                    countdown=1
-                )
-                return {
-                    'timer_type': 'session',
-                    'ttl': session_ttl,
-                    'channel': f'timer:channel:{user_id}'
-                }
-
-            if is_draft and draft_ttl > 0:
-                # Démarrer la tâche de mise à jour du timer de draft
-                update_timer_channel.apply_async(
-                    kwargs={
+                        'task': None,
+                        'status': status['status'],
+                        'error': None
+                    }
+                else:
+                    # Créer une tâche asynchrone pour le timer de session avec plus de mises à jour
+                    timer_task = asyncio.create_task(
+                        update_timer_channel(
+                            channel=f'timer:channel:{user_id}',
+                            initial_ttl=session_ttl,
+                            timer_type=session_type,
+                            max_updates=60  # Augmenté pour permettre plus de mises à jour
+                        )
+                    )
+                    self._timer_tasks[user_id] = timer_task
+                    status = await self.get_user_status(user_id)
+                    return {
+                        'timer_type': session_type,
+                        'ttl': session_ttl,
                         'channel': f'timer:channel:{user_id}',
-                        'initial_ttl': draft_ttl,
-                        'timer_type': 'draft',
-                        'max_updates': 3
-                    },
-                    countdown=1
-                )
-                return {
-                    'timer_type': 'draft',
-                    'ttl': draft_ttl,
-                    'channel': f'timer:channel:{user_id}'
-                }
+                        'task': timer_task,
+                        'status': status['status']
+                    }
 
-            return {}
+            if is_draft:
+                session_type = "draft"
+                # Vérifier l'expiration avec la fonction existante
+                if await auto_expiration(draft_ttl, session_type, user_id):
+                    # Mettre à jour le statut après l'expiration
+                    status = await self.get_user_status(user_id)
+                    return {
+                        'timer_type': session_type,
+                        'ttl': 0,
+                        'channel': f'timer:channel:{user_id}',
+                        'task': None,
+                        'status': status['status'],
+                        'error': None
+                    }
+                else:
+                    # Créer une tâche asynchrone pour le timer de draft avec plus de mises à jour
+                    timer_task = asyncio.create_task(
+                        update_timer_channel(
+                            channel=f'timer:channel:{user_id}',
+                            initial_ttl=draft_ttl,
+                            timer_type=session_type,
+                            max_updates=60  # Augmenté pour permettre plus de mises à jour
+                        )
+                    )
+                    self._timer_tasks[user_id] = timer_task
+                    status = await self.get_user_status(user_id)
+                    return {
+                        'timer_type': session_type,
+                        'ttl': draft_ttl,
+                        'channel': f'timer:channel:{user_id}',
+                        'task': timer_task,
+                        'status': status['status']
+                    }
 
         except Exception as e:
             logger.error(f"Erreur lors de la récupération des timers pour {user_id}: {str(e)}")
-            return {}
+            return {
+                'timer_type': None,
+                'ttl': 0,
+                'channel': None,
+                'task': None,
+                'status': "error",
+                'error': str(e)
+            }
+
+    async def _handle_session_expiration(self, user_id: str):
+        """Gère l'expiration d'une session."""
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.srem('active_users', user_id)
+            pipe.delete(f'session:{user_id}')
+            pipe.publish(f'queue_status:{user_id}', json.dumps({
+                "status": "disconnected",
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }))
+            await pipe.execute()
+
+    async def _handle_draft_expiration(self, user_id: str):
+        """Gère l'expiration d'un draft."""
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.srem('draft_users', user_id)
+            pipe.delete(f'draft:{user_id}')
+            pipe.publish(f'queue_status:{user_id}', json.dumps({
+                "status": "disconnected",
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }))
+            await pipe.execute()
 
     async def _cleanup_inconsistent_state(self, user_id: str):
         """Nettoie un état incohérent."""
@@ -749,6 +1037,7 @@ class QueueManager:
                 pipe.delete(f'session:{user_id}')
                 pipe.delete(f'status_history:{user_id}')
                 pipe.delete(f'last_status:{user_id}')
+                # Ne pas supprimer de accounts_queue car c'est un historique permanent
                 await pipe.execute()
                 logger.info(f"État nettoyé pour {user_id}")
         except Exception as e:
@@ -756,17 +1045,40 @@ class QueueManager:
 
     async def get_metrics(self) -> dict:
         """Obtient les métriques de la file d'attente."""
-        #@-> ADD draft information
         async with self.redis.pipeline(transaction=True) as pipe:
-            await pipe.scard('active_users')
-            await pipe.llen('waiting_queue')
+            pipe.smembers('active_users')  # Récupérer tous les utilisateurs actifs
+            pipe.lrange('waiting_queue', 0, -1)  # Récupérer la liste complète
+            pipe.scard('accounts_queue')  # Ajouter le nombre total d'utilisateurs enregistrés
+            pipe.smembers('draft_users')  # Récupérer les utilisateurs en draft
             results = await pipe.execute()
             
-        return {
-            "active_users": results[0],
-            "waiting_users": results[1],
-            "total_slots": self.max_active_users
-        }
+            active_users_set = results[0]
+            waiting_users = results[1]
+            total_accounts = results[2]
+            draft_users = results[3]
+            
+            # Vérifier les sessions actives
+            async with self.redis.pipeline(transaction=True) as pipe:
+                for user_id in active_users_set:
+                    pipe.exists(f'session:{user_id}')
+                session_results = await pipe.execute()
+            
+            # Compter uniquement les utilisateurs avec une session valide
+            real_active_users = sum(1 for exists in session_results if exists)
+            
+            # Filtrer les utilisateurs en attente qui ne sont pas en draft
+            real_waiting_users = [user for user in waiting_users if user.encode() not in draft_users]
+            
+            # Décoder les draft_users
+            decoded_draft_users = [user.decode('utf-8') for user in draft_users]
+            
+            return {
+                "active_users": real_active_users,
+                "waiting_users": len(real_waiting_users),
+                "draft_users": decoded_draft_users,
+                "total_slots": self.max_active_users,
+                "total_accounts": total_accounts
+            }
 
 @celery.task
 async def handle_draft_expiration(user_id: str):
@@ -790,8 +1102,8 @@ async def handle_draft_expiration(user_id: str):
             
             is_draft, has_draft, is_queued = results
             
-            if not (is_draft and has_draft) or is_queued:
-                logger.warning(f"État invalide pour expiration: draft={is_draft}, has_draft={has_draft}, queued={is_queued}")
+            if not is_draft or is_queued:
+                logger.warning(f" 4 État invalide pour expiration: draft={is_draft}, has_draft={has_draft}, queued={is_queued}")
                 return
         
         # Effectuer la transition
@@ -800,13 +1112,18 @@ async def handle_draft_expiration(user_id: str):
             pipe.delete(f'draft:{user_id}')
             await pipe.execute()
             
+        # Ajouter le nouveau statut à l'historique
+        status_info = {
+            "status": "disconnected",
+            "position": None,
+            "reason": "draft_timeout",
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        status_json = json.dumps(status_info)
+        await redis.rpush(f'status_history:{user_id}', status_json)
+            
         # Publier la notification
-        await redis.publish(f'queue_status:{user_id}', 
-            json.dumps({
-                "status": "expired",
-                "message": "Draft expiré"
-            })
-        )
+        await redis.publish(f'queue_status:{user_id}', status_json)
         logger.info(f"Draft expiré avec succès pour {user_id}")
         
     except Exception as e:
@@ -837,8 +1154,9 @@ async def cleanup_session(user_id: str):
             
             is_active, has_session = results
             
-            if not (is_active and has_session):
-                logger.warning(f"État invalide pour nettoyage: active={is_active}, has_session={has_session}")
+            # On nettoie si l'utilisateur est actif, même si la session n'existe plus
+            if not is_active:
+                logger.warning(f"5 État invalide pour nettoyage: active={is_active}, has_session={has_session}")
                 return
         
         # Effectuer le nettoyage
@@ -847,13 +1165,18 @@ async def cleanup_session(user_id: str):
             pipe.delete(f'session:{user_id}')
             await pipe.execute()
             
+        # Ajouter le nouveau statut à l'historique
+        status_info = {
+            "status": "disconnected",
+            "position": None,
+            "reason": "session_timeout",
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        status_json = json.dumps(status_info)
+        await redis.rpush(f'status_history:{user_id}', status_json)
+            
         # Publier la notification
-        await redis.publish(f'queue_status:{user_id}', 
-            json.dumps({
-                "status": "disconnected",
-                "reason": "session_timeout"
-            })
-        )
+        await redis.publish(f'queue_status:{user_id}', status_json)
         logger.info(f"Session nettoyée avec succès pour {user_id}")
         
     except Exception as e:
@@ -863,81 +1186,117 @@ async def cleanup_session(user_id: str):
             await redis.aclose()
             logger.debug(f"Connexion Redis fermée pour {user_id}")
 
+async def auto_expiration(ttl, timer_type, user_id):
+    """Vérifie et gère l'expiration d'une session ou d'un draft.
+    
+    Args:
+        ttl: Le TTL actuel
+        timer_type: Le type de timer ('session' ou 'draft')
+        user_id: L'ID de l'utilisateur
+        
+    Returns:
+        bool: True si expiré et géré, False sinon
+    """
+    # Vérifier si le TTL est expiré ou invalide
+    if ttl <= 0 or ttl == -2:
+        logger.info(f"TTL expiré ou invalide pour {user_id} ({timer_type}): {ttl}")
+        # Lancer la tâche appropriée de nettoyage
+        if timer_type == 'session':
+            await cleanup_session(user_id)
+        else:
+            await handle_draft_expiration(user_id)
+        return True
+    else:
+        return False
+
 @celery.task(name='app.queue_manager.update_timer_channel')
 def update_timer_channel(channel: str, initial_ttl: int, timer_type: str, max_updates: int = 3, task_id: str = None):
     """Met à jour le canal de timer avec le TTL restant."""
     logger.info(f"Début de la tâche de mise à jour du timer pour {channel} (TTL initial: {initial_ttl})")
-    redis_client = None
-    lock_key = f"lock:{channel}"
-    
-    try:
-        # Utiliser un client Redis synchrone avec les variables d'environnement
-        redis_client = SyncRedis(
-            host=os.getenv('REDIS_HOST', 'localhost'),
-            port=int(os.getenv('REDIS_PORT', 6379)),
-            db=int(os.getenv('REDIS_DB', 0)),
-            decode_responses=True
-        )
+
+    async def _update_timer():
+        redis_client = None
+        lock_key = f"lock:{channel}"
         
-        # Essayer d'acquérir le verrou
-        if not redis_client.set(lock_key, task_id or "1", ex=10, nx=True):
-            logger.info(f"Une autre tâche est déjà en cours pour {channel}")
-            return {
-                'status': 'skipped',
-                'reason': 'locked'
-            }
-        
-        updates_left = max_updates
-        user_id = channel.split(':')[-1]
-        key = f"{timer_type}:{user_id}"
-        current_ttl = initial_ttl
-        
-        while updates_left > 0:
-            try:
-                # Vérifier l'état et le TTL en une seule transaction
-                pipe = redis_client.pipeline(transaction=True)
-                if timer_type == 'session':
-                    pipe.sismember('active_users', user_id)
-                else:
-                    pipe.sismember('draft_users', user_id)
-                pipe.ttl(key)
-                results = pipe.execute()
+        try:
+            # Utiliser un client Redis asynchrone
+            redis_client = Redis(
+                host=os.getenv('REDIS_HOST', 'localhost'),
+                port=int(os.getenv('REDIS_PORT', 6379)),
+                db=int(os.getenv('REDIS_DB', 0)),
+                decode_responses=True
+            )
+            
+            # Essayer d'acquérir le verrou
+            if not await redis_client.set(lock_key, task_id or "1", ex=10, nx=True):
+                logger.info(f"Une autre tâche est déjà en cours pour {channel}")
+                return {
+                    'status': 'skipped',
+                    'reason': 'locked'
+                }
+            
+            updates_left = max_updates
+            user_id = channel.split(':')[-1]
+            key = f"{timer_type}:{user_id}"
+            last_ttl = initial_ttl
+            
+            while updates_left > 0:
+                # Vérifier le TTL actuel
+                current_ttl = await redis_client.ttl(key)
+                logger.debug(f"TTL actuel pour {key}: {current_ttl}")
                 
-                is_valid_state, redis_ttl = results
+                # Si le TTL est négatif, on force à 0 pour le dernier message
+                if current_ttl < 0:
+                    current_ttl = 0
+                    logger.info(f"Timer expiré pour {key}")
+                    # Gérer l'expiration
+                    await auto_expiration(current_ttl, timer_type, user_id)
+                    break
                 
-                # Publier la mise à jour avec le TTL actuel
+                # Publier la mise à jour
                 message = {
                     'timer_type': timer_type,
                     'ttl': current_ttl,
                     'updates_left': updates_left,
                     'task_id': task_id
                 }
-                redis_client.publish(channel, json.dumps(message))
-                logger.debug(f"Mise à jour du timer pour {channel} (TTL: {current_ttl}, updates: {updates_left})")
+                await redis_client.publish(channel, json.dumps(message))
+                logger.debug(f"Message publié sur {channel}: {message}")
+                
+                if current_ttl == 0:
+                    break
                 
                 updates_left -= 1
-                current_ttl = max(0, current_ttl - 1)
-                
-                if updates_left > 0:
-                    time.sleep(1)  # Attendre 1 seconde avant la prochaine mise à jour
-                    
-            except Exception as e:
-                logger.error(f"Erreur lors de la mise à jour du timer: {str(e)}")
-                break
-        
-        return {
-            'status': 'success',
-            'ttl': current_ttl,
-            'updates_left': updates_left
-        }
-        
-    except Exception as e:
-        logger.error(f"Erreur lors de la mise à jour du timer: {str(e)}")
-        return {
-            'status': 'error',
-            'error': str(e)
-        }
-    finally:
-        if redis_client:
-            redis_client.delete(lock_key)  # Libérer le verrou
-            redis_client.close() 
+                last_ttl = current_ttl
+                await asyncio.sleep(1)  # Attendre 1 seconde entre les mises à jour
+            
+            # Si on n'a pas encore publié un message avec TTL=0, le faire maintenant
+            if last_ttl > 0:
+                message = {
+                    'timer_type': timer_type,
+                    'ttl': 0,
+                    'updates_left': 0,
+                    'task_id': task_id
+                }
+                await redis_client.publish(channel, json.dumps(message))
+                logger.debug(f"Message final publié sur {channel}: {message}")
+                # Gérer l'expiration finale
+                await auto_expiration(0, timer_type, user_id)
+            
+            return {
+                'status': 'completed',
+                'updates_sent': max_updates - updates_left
+            }
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de la mise à jour du timer: {str(e)}")
+            return {
+                'status': 'error',
+                'error': str(e)
+            }
+        finally:
+            if redis_client:
+                await redis_client.delete(lock_key)
+                await redis_client.aclose()
+    
+    return _update_timer() 

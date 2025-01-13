@@ -23,20 +23,30 @@ describe('API functions', () => {
 	});
 
 	it('should handle network errors', async () => {
-		mockedFetch.mockRejectedValue(new Error('Failed to fetch'));
-
-		await expect(joinQueue(userRequest)).rejects.toThrow('Failed to fetch');
-		expect(mockedFetch).toHaveBeenCalledWith(
-			`${API_URL}/queue/join`,
-			expect.any(Object)
-		);
+		const mockError = new TypeError('Failed to fetch');
+		vi.spyOn(window, 'fetch').mockRejectedValueOnce(mockError);
+		
+		try {
+			await joinQueue({ user_id: '12345' });
+			fail('Should have thrown an error');
+		} catch (error: unknown) {
+			expect(error).toBeInstanceOf(Error);
+			if (error instanceof Error) {
+				expect(error.message).toBe('Le serveur n\'est pas disponible');
+			}
+		}
 	});
 
-	it('should join the queue and return position', async () => {
+	it('should join the queue and return status info', async () => {
 		mockedFetch.mockResolvedValue({
-			ok: true,
-			json: async () => ({ position: 1 }),
-		} as Response);
+				ok: true,
+				json: async () => ({
+					last_status: null,
+					last_position: null,
+					commit_status: 'waiting',
+					commit_position: 1
+				}),
+			} as Response);
 
 		const result = await joinQueue(userRequest);
 		
@@ -48,16 +58,21 @@ describe('API functions', () => {
 				body: JSON.stringify(userRequest)
 			})
 		);
-		expect(result).toEqual({ position: 1 });
+		expect(result).toEqual({
+			last_status: null,
+			last_position: null,
+			commit_status: 'waiting',
+			commit_position: 1
+		});
 	});
 
 	it('should throw error when joining queue fails', async () => {
 		mockedFetch.mockResolvedValue({
 			ok: false,
-			json: async () => ({ detail: 'Already in queue or active' }),
+			json: async () => ({ detail: "Utilisateur déjà dans la file d'attente" }),
 		} as Response);
 
-		await expect(joinQueue(userRequest)).rejects.toThrow('Already in queue or active');
+		await expect(joinQueue(userRequest)).rejects.toThrow("Utilisateur déjà dans la file d'attente");
 		expect(mockedFetch).toHaveBeenCalledWith(
 			`${API_URL}/queue/join`,
 			expect.any(Object)
@@ -96,10 +111,13 @@ describe('API functions', () => {
 		);
 	});
 
-	it('should confirm connection and return session duration', async () => {
+	it('should confirm connection and return session info', async () => {
 		mockedFetch.mockResolvedValue({
 			ok: true,
-			json: async () => ({ session_duration: 300 }),
+			json: async () => ({
+				session_duration: 300,
+				total_duration: 600
+			}),
 		} as Response);
 
 		const result = await confirmConnection(userRequest);
@@ -112,7 +130,10 @@ describe('API functions', () => {
 				body: JSON.stringify(userRequest)
 			})
 		);
-		expect(result).toEqual({ session_duration: 300 });
+		expect(result).toEqual({
+			session_duration: 300,
+			total_duration: 600
+		});
 	});
 
 	it('should get user status', async () => {
@@ -122,21 +143,23 @@ describe('API functions', () => {
 				status: 'waiting',
 				position: 2,
 				remaining_time: 300,
-				estimated_wait_time: 600
+				estimated_wait_time: 600,
+				timestamp: '2025-01-10 09:04:30'
 			}),
 		} as Response);
 
 		const result = await getStatus('12345');
 		
 		expect(mockedFetch).toHaveBeenCalledWith(
-			`${API_URL}/queue/status/12345`,
-			expect.objectContaining({ method: 'GET' })
+				`${API_URL}/queue/status/12345`,
+				expect.objectContaining({ method: 'GET' })
 		);
 		expect(result).toEqual({
 			status: 'waiting',
 			position: 2,
 			remaining_time: 300,
-			estimated_wait_time: 600
+			estimated_wait_time: 600,
+			timestamp: '2025-01-10 09:04:30'
 		});
 	});
 
@@ -205,7 +228,8 @@ describe('API functions', () => {
 			json: async () => ({
 				timer_type: 'session',
 				ttl: 120,
-				total_duration: 300
+				total_duration: 300,
+				channel: 'timer:channel:12345'
 			}),
 		} as Response);
 
@@ -218,7 +242,8 @@ describe('API functions', () => {
 		expect(result).toEqual({
 			timer_type: 'session',
 			ttl: 120,
-			total_duration: 300
+			total_duration: 300,
+			channel: 'timer:channel:12345'
 		});
 	});
 });

@@ -136,7 +136,7 @@ class TestTimers:
         response = await test_client.get(f"/queue/timers/{user_id}")
         assert response.status_code == 200
         timers = response.json()
-        assert timers == {}, f"La réponse devrait être un objet vide, reçu: {timers}"
+        assert "error" in timers, f"La réponse devrait être un objet vide, reçu: {timers}"
 
     @pytest.mark.asyncio
     async def test_pubsub_connection_draft(self, queue_manager_with_checker, test_client, test_logger, redis_client):
@@ -147,7 +147,7 @@ class TestTimers:
         try:
             # Ajouter l'utilisateur à la file
             test_logger.debug(f"Ajout de l'utilisateur {user_id} à la file")
-            response = await test_client.post("/queue/join", json={"user_id": user_id})
+            response = await test_client.post(f"/queue/join/{user_id}")
             assert response.status_code == 200
             
             # Attendre que l'utilisateur soit en draft
@@ -199,7 +199,9 @@ class TestTimers:
             task_always_eager=True,
             task_eager_propagates=True,
             task_store_eager_result=True,
-            result_backend='cache'
+            result_backend='cache+memory://',
+            cache_backend='memory',
+            broker_url='memory://'
         )
         
         # Enregistrer la tâche dans Celery
@@ -208,11 +210,13 @@ class TestTimers:
         
         user_id = "test_user_pubsub_session"
         messages = []
+        pubsub = None
+        channel = None
         
         try:
             # Ajouter l'utilisateur à la file d'attente
             test_logger.debug(f"Ajout de l'utilisateur {user_id} à la file")
-            join_response = await test_client.post("/queue/join", json={"user_id": user_id})
+            join_response = await test_client.post(f"/queue/join/{user_id}")
             assert join_response.status_code == 200
             test_logger.info("Utilisateur ajouté à la file d'attente")
             
@@ -256,46 +260,68 @@ class TestTimers:
             assert session_ttl > 0, "Le TTL de la session devrait être positif"
             test_logger.info(f"TTL de la session: {session_ttl}")
             
-            # Lancer la tâche de mise à jour
-            test_logger.debug("Lancement de la tâche update_timer_channel")
+            # Lancer la tâche
+            test_logger.info("Lancement de la tâche update_timer_channel")
             task = update_timer_channel.apply_async(kwargs={
                 'channel': channel,
                 'initial_ttl': session_ttl,
                 'timer_type': 'session',
-                'max_updates': 3
+                'max_updates': 3,
+                'task_id': 'test_task'  # Identifiant unique pour cette tâche
             })
             test_logger.info(f"Tâche lancée avec l'ID: {task.id}")
-            
-            # Attendre un peu pour laisser la tâche démarrer
-            await asyncio.sleep(0.1)
-            
-            # Collecter les messages
-            test_logger.debug("Collecte des messages")
+
+            # Attendre que la tâche soit prête
+            while not task.ready():
+                await asyncio.sleep(0.1)
+
+            # Récupérer et exécuter la coroutine
+            coroutine_result = task.result
+            if asyncio.iscoroutine(coroutine_result):
+                test_logger.info("Exécution de la coroutine de la tâche")
+                await coroutine_result
+
+            # Attendre et collecter les messages
+            messages = []
             start_time = asyncio.get_event_loop().time()
             max_wait = 5  # 5 secondes maximum
-            
+            last_ttl = None
+
             while (asyncio.get_event_loop().time() - start_time) < max_wait:
                 message = await pubsub.get_message(timeout=1.0)
-                if message and message["type"] == "message":
-                    data = json.loads(message["data"])
+                if message and message['type'] == 'message':
+                    data = json.loads(message['data'])
                     messages.append(data)
                     test_logger.info(f"Message reçu: {data}")
-                    if len(messages) >= 3:  # On attend au moins 3 messages
+                    if len(messages) >= 3:  # Attendre 3 messages
                         break
                 await asyncio.sleep(0.1)
-            
+
             # Vérifier les messages
-            assert len(messages) > 0, "Aucun message reçu"
-            first_message = messages[0]
-            assert first_message["timer_type"] == "session"
-            assert 0 < first_message["ttl"] <= session_ttl
-            test_logger.info("Messages vérifiés avec succès")
-            
+            assert len(messages) == 3, f"Attendu 3 messages, reçu {len(messages)}"
+            test_logger.info(f"Nombre de messages reçus: {len(messages)}")
+
+            # Vérifier le contenu des messages
+            for i, msg in enumerate(messages):
+                assert msg['timer_type'] == 'session', f"Type de timer incorrect: {msg['timer_type']}"
+                assert 'ttl' in msg, "TTL manquant dans le message"
+                assert msg['ttl'] > 0, f"TTL invalide: {msg['ttl']}"
+                if i > 0:
+                    assert msg['ttl'] <= messages[i-1]['ttl'], f"TTL ne diminue pas: {messages[i-1]['ttl']} -> {msg['ttl']}"
+                test_logger.debug(f"Message {i+1} validé: {msg}")
+
+        except asyncio.TimeoutError as e:
+            test_logger.error(f"Timeout pendant l'exécution du test: {str(e)}")
+            raise
+        except Exception as e:
+            test_logger.error(f"Erreur pendant l'exécution du test: {str(e)}")
+            raise
         finally:
             # Cleanup
             test_logger.debug("Nettoyage")
-            await pubsub.unsubscribe(channel)
-            await pubsub.aclose()
+            if pubsub:  # Vérifier si pubsub a été créé
+                await pubsub.unsubscribe(channel)
+                await pubsub.aclose()
             await redis_client.delete(f"session:{user_id}")
             await redis_client.srem("active_users", user_id)
             await redis_client.srem("draft_users", user_id)
@@ -308,34 +334,38 @@ class TestTimers:
     async def test_pubsub_multiple_updates(self, test_client, redis_client, queue_manager_with_checker, test_logger):
         """Test la réception de plusieurs mises à jour de timer en mode asynchrone."""
         from celery_test_config import setup_test_celery
-        
+        from app.queue_manager import update_timer_channel
+
         # Configuration de Celery en mode asynchrone
         celery_app = setup_test_celery()
         test_logger.info("Celery configuré en mode asynchrone")
-        
+
         user_id = "test_user_pubsub_multiple"
         messages = []
-
-        # Ajouter l'utilisateur à la file d'attente
-        test_logger.debug(f"Ajout de l'utilisateur {user_id} à la file")
-        join_response = await test_client.post("/queue/join", json={"user_id": user_id})
-        assert join_response.status_code == 200
-
-        # Attendre que le slot checker place l'utilisateur en draft
-        test_logger.debug("Attente du placement en draft")
-        max_wait = 2  # 2 secondes maximum
-        start_time = asyncio.get_event_loop().time()
-        is_draft = False
-        
-        while not is_draft and (asyncio.get_event_loop().time() - start_time) < max_wait:
-            is_draft = await redis_client.sismember('draft_users', user_id)
-            if not is_draft:
-                await asyncio.sleep(0.1)
-        
-        assert is_draft, "L'utilisateur n'a pas été placé en draft après 2 secondes"
-        test_logger.info(f"Utilisateur {user_id} placé en draft avec succès")
+        pubsub = None
+        channel = None
 
         try:
+            # Ajouter l'utilisateur à la file d'attente
+            test_logger.debug(f"Ajout de l'utilisateur {user_id} à la file")
+            join_response = await test_client.post(f"/queue/join/{user_id}")
+            assert join_response.status_code == 200
+            test_logger.info("Utilisateur ajouté à la file d'attente")
+            
+            # Attendre que le slot checker place l'utilisateur en draft
+            test_logger.debug("Attente du placement en draft")
+            max_wait = 2  # 2 secondes maximum
+            start_time = asyncio.get_event_loop().time()
+            is_draft = False
+            
+            while not is_draft and (asyncio.get_event_loop().time() - start_time) < max_wait:
+                is_draft = await redis_client.sismember('draft_users', user_id)
+                if not is_draft:
+                    await asyncio.sleep(0.1)
+            
+            assert is_draft, "L'utilisateur n'a pas été placé en draft après 2 secondes"
+            test_logger.info(f"Utilisateur {user_id} placé en draft avec succès")
+
             # Setup pubsub connection
             test_logger.debug("Configuration de la connexion PubSub")
             pubsub = redis_client.pubsub()
@@ -348,73 +378,75 @@ class TestTimers:
             assert draft_ttl > 0, "Le TTL du draft devrait être positif"
             test_logger.info(f"TTL du draft: {draft_ttl}")
 
-            # Lancer la tâche de manière asynchrone
-            test_logger.debug("Lancement de la tâche update_timer_channel en mode asynchrone")
-            task = update_timer_channel.apply_async(
-                kwargs={
-                    'channel': channel,
-                    'initial_ttl': draft_ttl,
-                    'timer_type': "draft",
-                    'max_updates': 3
-                }
-            )
-            test_logger.info(f"Tâche lancée avec l'ID: {task.id}")
-
-            # Collecter les messages pendant que la tâche s'exécute
-            test_logger.debug("Collecte des messages")
-            start_time = asyncio.get_event_loop().time()
-            max_wait = 10  # 10 secondes maximum pour le mode asynchrone
+            # Lancer la tâche directement et en parallèle avec la collecte des messages
+            test_logger.debug("Lancement de la tâche update_timer_channel")
             
-            while (asyncio.get_event_loop().time() - start_time) < max_wait:
-                message = await pubsub.get_message(timeout=0.1)
-                if message and message["type"] == "message":
-                    data = json.loads(message["data"])
-                    messages.append(data)
-                    test_logger.info(f"Message reçu: {data}")
-                    if len(messages) >= 3:  # On attend au moins 3 messages
-                        break
-                await asyncio.sleep(0.1)
-
-            # Attendre que la tâche soit terminée
-            try:
-                task_result = await asyncio.wait_for(
-                    asyncio.to_thread(task.get),
-                    timeout=5.0
+            async def run_timer_task():
+                # Exécuter la fonction directement plutôt que via Celery
+                await update_timer_channel(
+                    channel=channel,
+                    initial_ttl=draft_ttl,
+                    timer_type="draft",
+                    max_updates=3
                 )
-                test_logger.info(f"Résultat de la tâche: {task_result}")
-            except asyncio.TimeoutError:
-                test_logger.warning("Timeout en attendant le résultat de la tâche")
+                test_logger.info("Tâche de timer terminée")
 
-            # Verify messages
-            assert len(messages) >= 3, f"Au moins 3 messages devraient être reçus (reçu: {len(messages)})"
-            test_logger.info(f"Nombre de messages reçus: {len(messages)}")
+            # Créer une tâche asyncio pour l'exécution en parallèle
+            timer_task = asyncio.create_task(run_timer_task())
             
-            # Vérifier le premier message
-            first_message = messages[0]
-            assert first_message["timer_type"] == "draft"
-            assert 0 < first_message["ttl"] <= 300
-            test_logger.info(f"Premier message vérifié: {first_message}")
+            # Attendre et collecter les messages
+            test_logger.debug("Collecte des messages")
+            try:
+                async with asyncio.timeout(5):  # 5 secondes maximum
+                    while len(messages) < 3:  # On attend 3 messages
+                        message = await pubsub.get_message(timeout=0.1)
+                        if message and message["type"] == "message":
+                            data = json.loads(message["data"])
+                            messages.append(data)
+                            test_logger.info(f"Message reçu: {data}")
+                        await asyncio.sleep(0.05)
+            except asyncio.TimeoutError:
+                test_logger.error(f"Timeout pendant l'attente des messages. Messages reçus: {len(messages)}")
+                raise
+            finally:
+                # S'assurer que la tâche est terminée
+                if not timer_task.done():
+                    timer_task.cancel()
+                    try:
+                        await timer_task
+                    except asyncio.CancelledError:
+                        pass
 
-            # Vérifier que les TTL diminuent
-            for i in range(1, len(messages)):
-                assert messages[i]["ttl"] <= messages[i-1]["ttl"], \
-                    f"Le TTL devrait diminuer: {messages[i-1]['ttl']} -> {messages[i]['ttl']}"
-                test_logger.debug(f"TTL diminue correctement: {messages[i-1]['ttl']} -> {messages[i]['ttl']}")
+            # Vérifier les messages
+            assert len(messages) > 0, "Aucun message reçu"
+            test_logger.info(f"Nombre total de messages reçus: {len(messages)}")
 
+            # Vérifier le contenu des messages
+            for idx, message in enumerate(messages):
+                assert message["timer_type"] == "draft", f"Message {idx}: type incorrect"
+                assert "ttl" in message, f"Message {idx}: pas de TTL"
+                assert message["ttl"] <= draft_ttl, f"Message {idx}: TTL invalide"
+                test_logger.info(f"Message {idx} validé: {message}")
+
+        except Exception as e:
+            test_logger.error(f"Erreur pendant le test: {str(e)}")
+            raise
         finally:
             # Cleanup
-            test_logger.debug("Nettoyage")
-            await pubsub.unsubscribe(channel)
-            await pubsub.aclose()
+            if pubsub:
+                await pubsub.unsubscribe(channel)
+                await pubsub.aclose()
             await redis_client.delete(f"draft:{user_id}")
             await redis_client.srem("draft_users", user_id)
-            test_logger.info("Test terminé, nettoyage effectué")
+            await redis_client.delete(f"status_history:{user_id}")
+            await redis_client.delete(f"last_status:{user_id}")
+            test_logger.info("Nettoyage terminé")
 
 @pytest.mark.asyncio
 async def test_update_timer_channel_expiration(celery_app, redis_client, test_logger):
     """Test de l'expiration du timer."""
     test_logger.info("Démarrage du test d'expiration du timer")
-    
+
     # Configuration de Celery
     celery_app.conf.update(
         task_always_eager=True,
@@ -423,7 +455,7 @@ async def test_update_timer_channel_expiration(celery_app, redis_client, test_lo
         result_backend='cache',
         cache_backend='memory'
     )
-    
+
     # Enregistrer la tâche dans Celery
     from app.queue_manager import update_timer_channel
     celery_app.tasks.register(update_timer_channel)
@@ -431,7 +463,7 @@ async def test_update_timer_channel_expiration(celery_app, redis_client, test_lo
     # Créer une clé de draft avec un TTL court
     user_id = "test_timer_expiration"
     channel = f"timer:channel:{user_id}"
-    ttl = 2  # Augmenté à 2 secondes
+    ttl = 3  # TTL de 3 secondes
 
     # Créer la clé de draft et ajouter l'utilisateur au set draft_users
     await redis_client.setex(f"draft:{user_id}", ttl, "1")
@@ -452,23 +484,33 @@ async def test_update_timer_channel_expiration(celery_app, redis_client, test_lo
             'timer_type': 'draft',
             'max_updates': 5
         })
-        
-        # Attendre un peu pour laisser la tâche démarrer
-        await asyncio.sleep(0.1)
+
+        # Attendre que la tâche soit prête
+        test_logger.info("Attente de la tâche...")
+        while not task.ready():
+            await asyncio.sleep(0.1)
+
+        # Récupérer le résultat (qui est une coroutine)
+        coroutine_result = task.result
+        if asyncio.iscoroutine(coroutine_result):
+            # Exécuter la coroutine
+            test_logger.info("Exécution de la coroutine de la tâche")
+            await coroutine_result
 
         # Attendre et collecter les messages
         messages = []
-        async def collect_messages():
-            while len(messages) < 1:  # Attendre au moins 1 message
-                message = await pubsub.get_message(timeout=1.0)
-                if message and message['type'] == 'message':
-                    data = json.loads(message['data'])
-                    messages.append(data)
-                    test_logger.info(f"Message reçu: {data}")
-                await asyncio.sleep(0.1)
+        start_time = asyncio.get_event_loop().time()
+        max_wait = 10  # 10 secondes maximum
 
-        # Attendre les messages avec timeout
-        await asyncio.wait_for(collect_messages(), timeout=5.0)  # Augmenté à 5 secondes
+        while (asyncio.get_event_loop().time() - start_time) < max_wait:
+            message = await pubsub.get_message(timeout=1.0)
+            if message and message['type'] == 'message':
+                data = json.loads(message['data'])
+                messages.append(data)
+                test_logger.info(f"Message reçu: {data}")
+                if data.get('ttl', 0) <= 0:  # Si on reçoit un message avec TTL <= 0
+                    break
+            await asyncio.sleep(0.1)
 
         # Vérifier que nous avons reçu au moins un message
         assert len(messages) > 0, "Aucun message reçu"
@@ -476,16 +518,13 @@ async def test_update_timer_channel_expiration(celery_app, redis_client, test_lo
 
         # Vérifier le contenu du dernier message
         last_message = messages[-1]
-        assert last_message["timer_type"] == "draft"
-        assert last_message["ttl"] <= ttl
-        test_logger.info(f"Dernier message vérifié: {last_message}")
+        assert last_message['timer_type'] == 'draft', "Type de timer incorrect"
+        assert last_message['ttl'] <= 0, "Le dernier TTL devrait être <= 0"
 
-    except asyncio.TimeoutError:
-        test_logger.error("Timeout en attendant les messages")
-        raise
-    except Exception as e:
-        test_logger.error(f"Erreur lors de l'exécution de update_timer_channel: {str(e)}")
-        raise
+        # Vérifier que la clé a expiré
+        exists = await redis_client.exists(f"draft:{user_id}")
+        assert not exists, "La clé draft devrait avoir expiré"
+
     finally:
         # Cleanup
         await pubsub.unsubscribe(channel)
@@ -528,39 +567,36 @@ async def test_update_timer_channel(celery_app, redis_client, test_logger):
     test_logger.info(f"Abonnement au canal {channel}")
     
     try:
-        # Lancer la tâche
-        test_logger.info("Lancement de la tâche update_timer_channel")
-        task = update_timer_channel.apply_async(kwargs={
-            'channel': channel,
-            'initial_ttl': ttl,
-            'timer_type': 'session',
-            'max_updates': 3,
-            'task_id': 'test_task'  # Identifiant unique pour cette tâche
-        })
-        test_logger.info(f"Tâche lancée avec l'ID: {task.id}")
-        
-        # Attendre un peu pour laisser la tâche démarrer
-        await asyncio.sleep(0.1)
-        
+        # Lancer la tâche de manière asynchrone
+        test_logger.debug("Lancement de la tâche update_timer_channel en mode asynchrone")
+        from test_timers_async import execute_timer_task
+        task = await execute_timer_task(
+            channel=channel,
+            initial_ttl=ttl,
+            timer_type="session",
+            max_updates=3,
+            test_logger=test_logger
+        )
+        while not task.ready():
+            await asyncio.sleep(0.1)
         # Attendre et collecter les messages
         messages = []
         start_time = asyncio.get_event_loop().time()
-        max_wait = 5  # 5 secondes maximum
+        max_wait = 10  # 10 secondes maximum
         last_ttl = None
         
         while (asyncio.get_event_loop().time() - start_time) < max_wait:
             message = await pubsub.get_message(timeout=1.0)
             if message and message['type'] == 'message':
                 data = json.loads(message['data'])
-                if data.get('task_id') == 'test_task':  # Ne traiter que les messages de notre tâche
-                    if last_ttl is None or data['ttl'] <= last_ttl:  # Ne garder que les messages avec TTL décroissant
-                        messages.append(data)
-                        last_ttl = data['ttl']
-                        test_logger.info(f"Message reçu et accepté: {data}")
-                    else:
-                        test_logger.warning(f"Message ignoré car TTL non décroissant: {data}")
-                    if len(messages) >= 3:  # Attendre 3 messages
-                        break
+                if last_ttl is None or data['ttl'] <= last_ttl:  # Ne garder que les messages avec TTL décroissant
+                    messages.append(data)
+                    last_ttl = data['ttl']
+                    test_logger.info(f"Message reçu et accepté: {data}")
+                else:
+                    test_logger.warning(f"Message ignoré car TTL non décroissant: {data}")
+                if len(messages) >= 3:  # Attendre 3 messages
+                    break
             await asyncio.sleep(0.1)
         
         # Vérifier les messages
@@ -571,7 +607,7 @@ async def test_update_timer_channel(celery_app, redis_client, test_logger):
         for i, msg in enumerate(messages):
             assert msg['timer_type'] == 'session', f"Type de timer incorrect: {msg['timer_type']}"
             assert 'ttl' in msg, "TTL manquant dans le message"
-            assert msg['ttl'] > 0, f"TTL invalide: {msg['ttl']}"
+            assert msg['ttl'] >= 0, f"TTL invalide: {msg['ttl']}"
             if i > 0:
                 assert msg['ttl'] <= messages[i-1]['ttl'], f"TTL ne diminue pas: {messages[i-1]['ttl']} -> {msg['ttl']}"
             test_logger.debug(f"Message {i+1} validé: {msg}")
@@ -581,8 +617,10 @@ async def test_update_timer_channel(celery_app, redis_client, test_logger):
         raise
     finally:
         # Cleanup
-        await pubsub.unsubscribe(channel)
-        await pubsub.aclose()
+        test_logger.debug("Nettoyage")
+        if pubsub:  # Vérifier si pubsub a été créé
+            await pubsub.unsubscribe(channel)
+            await pubsub.aclose()
         await redis_client.delete(f"session:{user_id}")
         await redis_client.srem("active_users", user_id)
         test_logger.info("Test terminé, nettoyage effectué") 

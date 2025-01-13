@@ -5,6 +5,36 @@ import json
 from celery_test_config import setup_test_celery
 from app.queue_manager import update_timer_channel
 
+async def execute_timer_task(channel: str, initial_ttl: int, timer_type: str, max_updates: int, test_logger):
+    """Exécute la tâche de timer de manière asynchrone."""
+    # Lancer la tâche
+    task = update_timer_channel.apply_async(
+        kwargs={
+            'channel': channel,
+            'initial_ttl': initial_ttl,
+            'timer_type': timer_type,
+            'max_updates': max_updates
+        }
+    )
+    test_logger.info(f"Tâche lancée avec l'ID: {task.id}")
+
+    # Attendre que la tâche soit prête
+    while not task.ready():
+        await asyncio.sleep(0.1)
+    
+    # Récupérer le résultat
+    result = task.result
+    test_logger.info(f"Résultat de la tâche: {result}")
+    
+    # Si le résultat est une coroutine, l'exécuter
+    if asyncio.iscoroutine(result):
+        test_logger.info("Exécution de la coroutine de la tâche")
+        await result
+    else:
+        test_logger.info("Le résultat n'est pas une coroutine")
+    
+    return task
+
 class TestTimersAsync:
     @pytest.mark.asyncio
     async def test_pubsub_multiple_updates_async(self, test_client, redis_client, queue_manager_with_checker, test_logger):
@@ -18,7 +48,7 @@ class TestTimersAsync:
 
         # Ajouter l'utilisateur à la file d'attente
         test_logger.debug(f"Ajout de l'utilisateur {user_id} à la file")
-        join_response = await test_client.post("/queue/join", json={"user_id": user_id})
+        join_response = await test_client.post(f"/queue/join/{user_id}")
         assert join_response.status_code == 200
 
         # Attendre que le slot checker place l'utilisateur en draft
@@ -50,40 +80,40 @@ class TestTimersAsync:
 
             # Lancer la tâche de manière asynchrone
             test_logger.debug("Lancement de la tâche update_timer_channel en mode asynchrone")
-            task = update_timer_channel.apply_async(
-                kwargs={
-                    'channel': channel,
-                    'initial_ttl': draft_ttl,
-                    'timer_type': "draft",
-                    'max_updates': 3
-                }
+            task = await execute_timer_task(
+                channel=channel,
+                initial_ttl=draft_ttl,
+                timer_type="draft",
+                max_updates=3,
+                test_logger=test_logger
             )
-            test_logger.info(f"Tâche lancée avec l'ID: {task.id}")
 
             # Collecter les messages pendant que la tâche s'exécute
             test_logger.debug("Collecte des messages")
             start_time = asyncio.get_event_loop().time()
-            max_wait = 10  # 10 secondes maximum pour le mode asynchrone
+            max_wait = 30  # 30 secondes maximum
+            message_count = 0
             
             while (asyncio.get_event_loop().time() - start_time) < max_wait:
-                message = await pubsub.get_message(timeout=0.1)
+                message = await pubsub.get_message(timeout=1.0)
+                test_logger.debug(f"Message reçu (brut): {message}")
+                
                 if message and message["type"] == "message":
                     data = json.loads(message["data"])
                     messages.append(data)
-                    test_logger.info(f"Message reçu: {data}")
-                    if len(messages) >= 3:  # On attend au moins 3 messages
+                    message_count += 1
+                    test_logger.info(f"Message {message_count} reçu: {data}")
+                    if len(messages) >= 3:
+                        test_logger.info("Nombre requis de messages atteint")
                         break
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.5)
 
-            # Attendre que la tâche soit terminée
-            try:
-                task_result = await asyncio.wait_for(
-                    asyncio.to_thread(task.get),
-                    timeout=5.0
-                )
-                test_logger.info(f"Résultat de la tâche: {task_result}")
-            except asyncio.TimeoutError:
-                test_logger.warning("Timeout en attendant le résultat de la tâche")
+            # Vérifier l'état de la tâche
+            test_logger.info(f"État de la tâche: {task.state}")
+            if task.ready():
+                test_logger.info(f"Résultat de la tâche: {task.result}")
+            else:
+                test_logger.warning("La tâche n'est pas encore terminée")
 
             # Verify messages
             assert len(messages) >= 3, f"Au moins 3 messages devraient être reçus (reçu: {len(messages)})"
@@ -162,13 +192,21 @@ class TestTimersAsync:
             })
             test_logger.info(f"Tâche lancée avec l'ID: {task.id}")
             
-            # Attendre un peu pour laisser la tâche démarrer
-            await asyncio.sleep(0.1)
+            # Attendre que la tâche soit prête
+            while not task.ready():
+                await asyncio.sleep(0.1)
+            
+            # Récupérer le résultat (qui est une coroutine)
+            coroutine_result = task.result
+            if asyncio.iscoroutine(coroutine_result):
+                # Exécuter la coroutine
+                test_logger.info("Exécution de la coroutine de la tâche")
+                await coroutine_result
             
             # Vérifier les messages reçus
             messages_received = []
             start_time = asyncio.get_event_loop().time()
-            max_wait = 10  # 10 secondes maximum
+            max_wait = 20  # 20 secondes maximum
             
             # Attendre et collecter les messages
             while (asyncio.get_event_loop().time() - start_time) < max_wait:

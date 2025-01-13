@@ -2,9 +2,11 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug Tests file",
-            "type": "debugpy",
+            "name": "Cursor - Debug Tests",
+            "type": "python",
             "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}",
             "module": "pytest",
             "args": [
                 "-v",
@@ -26,9 +28,67 @@
             "purpose": ["debug-test"]
         },
         {
-            "name": "Debug Tests",
-            "type": "debugpy",
+            "name": "Extension Test Debug",
+            "type": "python",
             "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}",
+            "module": "pytest",
+            "args": [
+                "-v",
+                "--log-cli-level=DEBUG",
+                "${file}",
+                "-s"
+            ],
+            "env": {
+                "TESTING": "true",
+                "PYTHONPATH": "${workspaceFolder}",
+                "REDIS_HOST": "localhost",
+                "REDIS_PORT": "6379",
+                "REDIS_DB": "0",
+                "CELERY_BROKER_URL": "redis://localhost:6379/0",
+                "CELERY_RESULT_BACKEND": "redis://localhost:6379/0"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "purpose": ["debug-test"]
+        },
+        {
+            "name": "Debug Tests file",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}",
+            "module": "pytest",
+            "args": [
+                "-v",
+                "--log-cli-level=DEBUG",
+                "${file}",
+                "-s"
+            ],
+            "env": {
+                "TESTING": "true",
+                "PYTHONPATH": "${workspaceFolder}",
+                "REDIS_HOST": "localhost",
+                "REDIS_PORT": "6379",
+                "REDIS_DB": "0",
+                "CELERY_BROKER_URL": "redis://localhost:6379/0",
+                "CELERY_RESULT_BACKEND": "redis://localhost:6379/0",
+                "PYTHONBREAKPOINT": "debugpy.breakpoint",
+                "TEST_API_URL": "http://localhost:8001",
+                "BASE_URL": "http://localhost:8001"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "purpose": ["debug-test"],
+            "subProcess": true
+        },
+        {
+            "name": "Debug Tests",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}",
             "module": "pytest",
             "args": [
                 "-v",
@@ -64,6 +124,33 @@
                 }
             ],
             "justMyCode": false
+        },
+        {
+            "name": "Debug API Local",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "app.main:app",
+                "--reload",
+                "--port",
+                "8001",
+                "--host",
+                "0.0.0.0"
+            ],
+            "jinja": true,
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "REDIS_HOST": "localhost",
+                "REDIS_PORT": "6379",
+                "REDIS_DB": "0",
+                "CELERY_BROKER_URL": "redis://localhost:6379/0",
+                "CELERY_RESULT_BACKEND": "redis://localhost:6379/0",
+                "PYTHONBREAKPOINT": "debugpy.breakpoint"
+            },
+            "console": "integratedTerminal",
+            "preLaunchTask": "wait-for-api"
         }
     ],
     "compounds": [
@@ -73,7 +160,9 @@
         },
         {
             "name": "Debug All file",
-            "configurations": ["Debug API Container", "Debug Tests file"]
+            "configurations": ["Debug API Local", "Debug Tests file"],
+            "preLaunchTask": "wait-for-api",
+            "stopAll": true
         }
     ]
 } 

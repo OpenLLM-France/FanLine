@@ -4,7 +4,8 @@ import os
 def setup_test_celery():
     """Configure Celery pour les tests en mode asynchrone."""
     # Récupération des variables d'environnement Redis
-    redis_host = os.getenv('REDIS_HOST', 'redis-test')
+    redis_host = os.getenv('REDIS_HOST', 'localhost')  # localhost en local
+        
     redis_port = int(os.getenv('REDIS_PORT', 6379))
     redis_db = int(os.getenv('REDIS_DB', 1))
     
@@ -24,7 +25,7 @@ def setup_test_celery():
     celery_app.conf.update({
         'broker_url': broker_url,
         'result_backend': backend_url,
-        'task_always_eager': False,  # Désactiver le mode eager
+        'task_always_eager': False,  # Désactiver le mode eager pour une vraie exécution async
         'task_eager_propagates': False,
         'worker_prefetch_multiplier': 1,
         'task_acks_late': False,
@@ -34,6 +35,8 @@ def setup_test_celery():
         'task_store_errors_even_if_ignored': True,
         'task_ignore_result': False,
         'worker_concurrency': 1,  # Un seul worker pour les tests
+        'broker_connection_retry': True,  # Activer les retry
+        'broker_connection_max_retries': None,  # Retry indéfiniment
     })
     
     return celery_app 

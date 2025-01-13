@@ -37,6 +37,7 @@ install-poetry:
 		echo "Poetry is already installed"; \
 	else \
 		curl -sSL https://install.python-poetry.org | python3 - --version $(POETRY_VERSION); \
+		export PATH="/root/.local/bin:$PATH"; \
 	fi
 
 install-deps:
