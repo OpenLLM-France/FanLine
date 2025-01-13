@@ -40,6 +40,9 @@
 	},
 	"dependencies": {
 		"@types/redis": "^4.0.10",
+		"flowbite": "^2.5.2",
+		"flowbite-svelte": "^0.47.4",
+		"flowbite-svelte-icons": "^2.0.2",
 		"node-fetch": "^2.7.0",
 		"redis": "^4.7.0",
 		"svelte-table": "^0.6.3"

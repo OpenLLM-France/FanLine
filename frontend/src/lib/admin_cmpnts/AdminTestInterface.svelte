@@ -1,27 +1,23 @@
 <script lang="ts">
     import SvelteTable from "svelte-table";
     import { Heart, Trash, Check } from "svelte-iconoir";
+    import { Alert } from "flowbite-svelte";
 
-    import {
-        joinQueue,
-        getMetrics,
-        leaveQueue,
-        confirmConnection,
-    } from "./queue";
-    import type { UserRequest } from "./types";
+    import {joinQueue, leaveQueue, confirmConnection, getMetrics} from "$lib/queue";
+    import type { UserRequest } from "$lib/types";
 
     /**
      * Represents the simulated user's data in the queue.
      * @remarks
      * This is a temporary solution to be finalized or replaced by QueueStatus in types.ts
-     * 
+     *
      * @param id - The user's unique identifier.
      * @param status - The user's current status in the queue. waiting, draft, connected, or disconnected.
      * @param position - The user's position in the queue.
      * @param timeSinceJoin - The time in seconds since the user joined the queue.
      * @param draftTimer - The time in seconds since the user entered the draft.
      * @param sessionTimer - The time in seconds since the user entered the session.
-     * 
+     *
      */
     interface UserQueueStats {
         id: string;
@@ -97,7 +93,7 @@
 
     /**
      * Generates a random user with default data.
-     * 
+     *
      * @returns A UserRequest object with the generated user's random user_id.
      * @remarks Also adds the user to the queue list. (Which should not be handled here)
      */
@@ -159,7 +155,7 @@
 
     /**
      * Handles the click event on the table cells.
-     * 
+     *
      * @param e - The CustomEvent object containing the cell's details.
      */
     function handleClick(e: CustomEvent) {
@@ -223,7 +219,7 @@
             });
     }
 
-    // Refresh the queue's and its users' status every second 
+    // Refresh the queue's and its users' status every second
     setInterval(() => {
         refreshUsers();
     }, 1000);
