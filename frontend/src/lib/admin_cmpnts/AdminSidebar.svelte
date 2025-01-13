@@ -6,8 +6,9 @@
         SidebarItem,
         SidebarWrapper,
         DarkMode,
+        Button,
     } from "flowbite-svelte";
-    import { ChartPieSolid, CogSolid } from "flowbite-svelte-icons";
+    import { ChartPieSolid, CogSolid, HomeSolid, BugSolid } from "flowbite-svelte-icons";
     $: activeUrl = $page.url.pathname;
 
     let sidebarIconStyle =
@@ -19,7 +20,7 @@
         <SidebarGroup class="min-h-screen ">
             <SidebarItem label="Dashboard" class="group" href="/admin">
                 <svelte:fragment slot="icon">
-                    <ChartPieSolid class={sidebarIconStyle} />
+                    <HomeSolid class={sidebarIconStyle} />
                 </svelte:fragment>
             </SidebarItem>
             <SidebarItem
@@ -31,7 +32,20 @@
                     <CogSolid class={sidebarIconStyle} />
                 </svelte:fragment>
             </SidebarItem>
+            <SidebarItem
+                label="Statistics"
+                class="group"
+                href="/admin/stats"
+            >
+                <svelte:fragment slot="icon">
+                    <ChartPieSolid class={sidebarIconStyle} />
+                </svelte:fragment>
+            </SidebarItem>
             <DarkMode />
+            <!-- Manually adjusting button to be identical to dark mode implementation -->
+            <button class="text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none rounded-lg text-sm p-2.5">
+                <a href="https://github.com/OpenLLM-France/FanLine/issues/new/choose"><BugSolid class="w-5 h-5 text-gray-500 dark:text-gray-400" /></a>
+            </button>
         </SidebarGroup>
     </SidebarWrapper>
 </Sidebar>
