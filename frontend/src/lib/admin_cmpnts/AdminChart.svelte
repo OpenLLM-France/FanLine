@@ -7,7 +7,7 @@
         Dropdown,
         DropdownItem,
     } from "flowbite-svelte"; 
-    let { main_value, unit, chart_data, height } = $$props;
+    let { main_value, unit, chart_data, height, show_graph } = $$props;
 
     let options = {
         chart: {
@@ -52,7 +52,7 @@
                 top: 0,
             },
         },
-        series: chart_data,
+        series: [chart_data],
         xaxis: {
             
             labels: {
@@ -69,9 +69,15 @@
             show: false,
         },
     };
+
+    if (!show_graph) {
+        options.chart.height = "0px";
+    }
+    console.log(chart_data)
 </script>
 
-
+<!-- TODO Could end up throwing an error if chart_data is undefined -->
+{#if chart_data.data && chart_data.data.length > 0}
 <Card>
     <div class="flex justify-between">
         <div>
@@ -89,3 +95,4 @@
     </div>
     <Chart {options} />
 </Card>
+{/if}
