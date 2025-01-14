@@ -77,21 +77,23 @@
 
 <!-- TODO Could end up throwing an error if chart_data is undefined -->
 {#if chart_data.data && chart_data.data.length > 0}
-<Card>
-    <div class="flex justify-between">
-        <div>
-            <h5
-                class="leading-none text-3xl font-bold text-gray-900 dark:text-white pb-2"
-            >
-                {main_value}
-            </h5>
-            <p
-                class="text-base font-normal text-gray-500 dark:text-gray-400"
-            >
-                {unit}
-            </p>
+<div class="test">
+    <Card class="max-w-none">
+        <div class="flex justify-between">
+            <div>
+                <h5
+                    class="leading-none text-3xl font-bold text-gray-900 dark:text-white pb-2"
+                >
+                    {main_value}
+                </h5>
+                <p
+                    class="text-base font-normal text-gray-500 dark:text-gray-400"
+                >
+                    {unit}
+                </p>
+            </div>
         </div>
-    </div>
-    <Chart {options} />
-</Card>
+        <Chart {options} />
+    </Card>
+</div>
 {/if}

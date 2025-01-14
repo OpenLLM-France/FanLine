@@ -20,7 +20,7 @@ const handleFetchError = (error: unknown) => {
 export const joinQueue = async (userRequest: UserRequest): Promise<{ position: number }> => {
     try {
         console.log('Tentative de joinQueue avec:', userRequest);
-        const response = await customFetch(`${API_URL}/queue/join`, {
+        const response = await customFetch(`${API_URL}/queue/join/${userRequest.user_id}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -47,7 +47,7 @@ export const joinQueue = async (userRequest: UserRequest): Promise<{ position: n
 
 // Leave Queue
 export const leaveQueue = async (userRequest: UserRequest): Promise<{ success: boolean }> => {
-    const response = await customFetch(`${API_URL}/queue/leave`, {
+    const response = await customFetch(`${API_URL}/queue/leave/${userRequest.user_id}`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
