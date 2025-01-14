@@ -51,3 +51,9 @@ export interface MockFetch {
     status?: number;
     statusText?: string;
 }
+
+export interface GetUsersResponse {
+    waiting_users: string[];
+    draft_users: string[];
+    active_users: string[];
+}

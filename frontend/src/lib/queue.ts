@@ -1,29 +1,8 @@
 import type { UserRequest } from './types.ts';
 import customFetch from './fetch';
 
-// Types de réponse de l'API
-interface QueueStatus {
-    status: 'waiting' | 'draft' | 'connected';
-    position?: number;
-    remaining_time: number;
-    estimated_wait_time: number;
-    timestamp: string;
-}
+import type { QueueStatus, QueueJoinResponse, QueueMetrics, TimerInfo, ConnectionResponse, ApiResponse, GetUsersResponse } from './types.ts';
 
-interface QueueMetrics {
-    active_users: number;
-    waiting_users: number;
-    total_slots: number;
-    average_wait_time: number;
-    average_session_time: number;
-}
-
-interface TimerInfo {
-    ttl: number;
-    channel: string;
-    timer_type: 'session' | 'draft';
-    total_duration: number;
-}
 
 // Base API URL
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -111,7 +90,7 @@ export const confirmConnection = async (userRequest: UserRequest): Promise<{ ses
     }
 };
 
-// Get Status
+// Récupérer le statut
 export const getStatus = async (userId: string): Promise<QueueStatus> => {
     try {
         console.log('Tentative de getStatus pour:', userId);
@@ -202,7 +181,9 @@ export const getTimers = async (userId: string): Promise<TimerInfo> => {
     }
 };
 
-export const getUsers = async (): Promise<{ waiting_users: string[], draft_users: string[], active_users: string[] }> => {
+
+
+export const getUsers = async (): Promise<GetUsersResponse> => {
     try {
         const response = await customFetch(`${API_URL}/queue/get_users`);
         if (!response.ok) {
