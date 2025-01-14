@@ -10,6 +10,7 @@
 
     export let columns;
     export let data;
+    
 </script>
 
 {#if data && data.length > 0}
@@ -17,14 +18,14 @@
     <Table shadow>
         <TableHead>
             {#each columns as column}
-                <TableHeadCell>{column}</TableHeadCell>
+                <TableHeadCell>{column.label}</TableHeadCell>
             {/each}
         </TableHead>
         <TableBody tableBodyClass="divide-y">
             {#each data as row}
                 <TableBodyRow>
-                    {#each row as cell}
-                        <TableBodyCell>{cell}</TableBodyCell>
+                    {#each columns as column}
+                        <TableBodyCell>{row[column.key]}</TableBodyCell>
                     {/each}
                 </TableBodyRow>
             {/each}

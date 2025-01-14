@@ -1,8 +1,11 @@
-<script>
+<script lang="ts">
     import AdminChart from "$lib/admin_cmpnts/AdminChart.svelte";
     import AdminTable from "$lib/admin_cmpnts/AdminTable.svelte";
     import { Card } from "flowbite-svelte";
     import { onMount } from "svelte";
+    import { getStatus } from "$lib/queue";
+    import { getUsers } from "$lib/queue";
+    import type { QueueStatus } from "$lib/types";
 
     let test_data = {
             name: "test",
@@ -11,32 +14,53 @@
         };
 
     let columns = [
-        "ID",
-        "Status",
-        "Position",
-        "Time since join",
-        "Draft timer",
-        "Session timer",
+        {
+            label: "ID",
+            key: "user_id",
+        },
+        {
+            label: "Status",
+            key: "status",
+        },
+        {
+            label: "Position",
+            key: "position",
+        }
     ];
-    let users = {
+    let users: {
+        active_users: QueueStatus[],
+        draft_users: QueueStatus[],
+        waiting_users: QueueStatus[]
+    } = {
         active_users: [],
         draft_users: [],
-        waiting_users: [],
+        waiting_users: []
     };
 
-    // TODO resolve fetch through queue.ts (api interface)
-    function fetchCurQueueStatus() {
-        fetch("http://localhost:8000/queue/get_users")
-            .then((res) => res.json())
-            .then((data) => {
-                console.log(data);
-                users = data;
-            });
+    async function fetchCurQueueStatus() {
+        try {
+            const data = await getUsers();
+
+            users.active_users = await Promise.all(
+                data.active_users.map(async (user_id: string) => await getStatus(user_id))
+            );
+
+            users.draft_users = await Promise.all(
+                data.draft_users.map(async (user_id: string) => await getStatus(user_id))
+            );
+
+            users.waiting_users = await Promise.all(
+                data.waiting_users.map(async (user_id: string) => await getStatus(user_id))
+            );
+
+        } catch (error) {
+            console.error("Error fetching queue status:", error);
+        }
     }
 
     setInterval(() => {
         fetchCurQueueStatus();
-    }, 1000);
+    }, 5000);
 </script>
 
 <div class="w-full p-4 h-screen overflow-y-auto">
