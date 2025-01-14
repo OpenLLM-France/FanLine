@@ -201,3 +201,23 @@ export const getTimers = async (userId: string): Promise<TimerInfo> => {
         throw error;
     }
 };
+
+export const getUsers = async (): Promise<{ waiting_users: string[], draft_users: string[], active_users: string[] }> => {
+    try {
+        const response = await customFetch(`${API_URL}/queue/get_users`);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail);
+        }
+
+        const data = await response.json();
+        return {
+            waiting_users: data.waiting_users,
+            draft_users: data.draft_users,
+            active_users: data.active_users
+        };
+    } catch (error) {
+        handleFetchError(error);
+        throw error;
+    }
+};
