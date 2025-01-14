@@ -937,13 +937,15 @@ class QueueManager:
                 "task_id": task.id,
                 "channel": f"timer:channel:{user_id}",
                 "status": "active",
-                "error": None
+                "error": None,
+                "user_id": user_id
             }
         
         # Aucun timer actif
         return {
             "error": "Aucun timer actif pour cet utilisateur",
-            "status": "inactive"
+            "status": "inactive",
+            "user_id": user_id
         }
 
     async def _handle_session_expiration(self, user_id: str):
