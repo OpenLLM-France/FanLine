@@ -105,3 +105,47 @@ class TestTimersAsync:
                 pipe.delete(f"last_status:{user_id}", f"status_history:{user_id}")
                 await pipe.execute()
             test_logger.info("Test terminé, nettoyage effectué") 
+
+async def execute_timer_task(channel: str, initial_ttl: int, timer_type: str, max_updates: int = 3, test_logger = None):
+    """Exécute une tâche de timer de manière asynchrone pour les tests.
+    
+    Args:
+        channel: Le canal sur lequel publier les mises à jour
+        initial_ttl: Le TTL initial
+        timer_type: Le type de timer (draft ou session)
+        max_updates: Le nombre maximum de mises à jour à effectuer
+        test_logger: Le logger de test pour le debugging
+    """
+    from app.queue_manager import update_timer_channel, auto_expiration
+    
+    # Créer et attendre la tâche d'expiration
+    expiration_task = auto_expiration.delay(initial_ttl, timer_type, channel.split(':')[-1])
+    if test_logger:
+        test_logger.info(f"Tâche d'expiration créée: {expiration_task.id}")
+    
+    try:
+        # Simuler les mises à jour du timer
+        for i in range(max_updates):
+            if test_logger:
+                test_logger.info(f"Mise à jour {i+1}/{max_updates} du timer {timer_type}")
+                
+            # Exécuter et attendre la mise à jour du timer
+            await update_timer_channel(
+                channel=channel,
+                initial_ttl=initial_ttl,
+                timer_type=timer_type,
+                max_updates=max_updates,
+                task_id=expiration_task.id
+            )
+            await asyncio.sleep(1)  # Attendre 1 seconde entre chaque mise à jour
+            
+    except Exception as e:
+        if test_logger:
+            test_logger.error(f"Erreur lors de l'exécution du timer: {str(e)}")
+        raise
+    finally:
+        # S'assurer que la tâche est terminée
+        if not expiration_task.ready():
+            expiration_task.revoke(terminate=True)
+            if test_logger:
+                test_logger.info("Tâche d'expiration révoquée") 

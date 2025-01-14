@@ -73,6 +73,19 @@ async def lifespan(app: FastAPI):
     # Démarrer le slot checker
     await app.state.queue_manager.start_slot_checker()
     
+    # Configuration de Celery
+    if os.environ.get('TESTING') == 'true':
+        from celery import current_app as celery_app
+        celery_app.conf.update(
+            task_always_eager=True,
+            task_eager_propagates=True,
+            broker_connection_retry=False,
+            broker_connection_max_retries=0,
+            result_backend='redis://localhost:6379',
+            broker_url='redis://localhost:6379'
+        )
+        logger.info("Mode test détecté, Celery configuré en mode eager")
+    
     yield
     
     # Nettoyage
@@ -320,20 +333,3 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
     except Exception as e:
         print(f"Erreur WebSocket pour {user_id}: {str(e)}")
         manager.disconnect(user_id) 
-
-@app.on_event("startup")
-async def startup_event():
-    """Configure les connexions Redis et le gestionnaire de file d'attente au démarrage."""
-    global redis_client, queue_manager
-    
-    redis_host = os.getenv('REDIS_HOST', 'localhost')
-    redis_port = int(os.getenv('REDIS_PORT', 6379))
-    
-    redis_client = redis.Redis(
-        host=redis_host,
-        port=redis_port,
-        decode_responses=True
-    )
-    
-    queue_manager = QueueManager(redis_client)
-    await queue_manager.initialize() 
