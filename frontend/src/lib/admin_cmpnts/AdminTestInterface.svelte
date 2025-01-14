@@ -113,7 +113,6 @@
         };
 
         users = [...users, new_user];
-        console.log(users);
         return new_user_request;
     }
 

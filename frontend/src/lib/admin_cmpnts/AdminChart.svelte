@@ -73,7 +73,6 @@
     if (!show_graph) {
         options.chart.height = "0px";
     }
-    console.log(chart_data)
 </script>
 
 <!-- TODO Could end up throwing an error if chart_data is undefined -->
