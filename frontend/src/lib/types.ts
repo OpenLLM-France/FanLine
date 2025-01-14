@@ -4,6 +4,7 @@ export interface UserRequest {
 
 // Types pour les réponses de l'API
 export interface QueueStatus {
+    user_id: string;
     status: 'waiting' | 'draft' | 'connected' | 'disconnected';
     position: number;
     remaining_time: number;

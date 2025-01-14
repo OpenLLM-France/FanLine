@@ -106,6 +106,7 @@ export const getStatus = async (userId: string): Promise<QueueStatus> => {
         const data = await response.json();
         console.log('Données getStatus:', data);
         return {
+            user_id: data.user_id,
             status: data.status,
             position: data.position,
             remaining_time: data.remaining_time || 0,
