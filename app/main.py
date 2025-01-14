@@ -270,15 +270,15 @@ async def get_users(queue_manager: QueueManager = Depends(get_queue_manager)) ->
     try:
         # Récupérer les utilisateurs en attente
         waiting_users = await queue_manager.redis.lrange('waiting_queue', 0, -1)
-        waiting_users = [user.decode('utf-8') for user in waiting_users]
+        waiting_users = [user.decode('utf-8') if isinstance(user, bytes) else user for user in waiting_users]
         
         # Récupérer les utilisateurs en draft
         draft_users = await queue_manager.redis.smembers('draft_users')
-        draft_users = [user.decode('utf-8') for user in draft_users]
+        draft_users = [user.decode('utf-8') if isinstance(user, bytes) else user for user in draft_users]
         
         # Récupérer les utilisateurs actifs
         active_users = await queue_manager.redis.smembers('active_users')
-        active_users = [user.decode('utf-8') for user in active_users]
+        active_users = [user.decode('utf-8') if isinstance(user, bytes) else user for user in active_users]
         
         return {
             "waiting_users": waiting_users,

@@ -122,3 +122,88 @@ class TestAPI:
         """Test le heartbeat pour un utilisateur invalide."""
         response = await test_client.post("/queue/heartbeat/invalid_user")
         assert response.status_code == 404  
+
+    @pytest.mark.asyncio
+    @pytest.mark.timeout(600)  # Increase the timeout to 60 seconds
+    async def test_get_users_endpoint(self, test_client, queue_manager, test_logger):
+        """Test l'endpoint /queue/get_users."""
+        test_logger.info("Démarrage du test de l'endpoint get_users")
+        
+        # Nettoyer Redis
+        await queue_manager.redis.flushdb()
+        test_logger.info("Redis nettoyé")
+        
+        # Arrêter le vérificateur automatique
+        await queue_manager.stop_slot_checker()
+        test_logger.info("Vérificateur automatique arrêté")
+        
+        # Vérifier l'état initial des files
+        response = await test_client.get("/queue/get_users")
+        assert response.status_code == 200
+        initial_data = response.json()
+        test_logger.info(f"État initial des files: {initial_data}")
+        
+        # 1. Ajouter et confirmer le premier utilisateur actif
+        user_active = "user_active_1"
+        response = await test_client.post(f"/queue/join/{user_active}")
+        assert response.status_code == 200
+        test_logger.info(f"Utilisateur {user_active} ajouté")
+        
+        # Forcer la vérification des slots pour le passage en draft
+        await queue_manager.check_available_slots()
+        test_logger.info("Vérification forcée des slots pour passage en draft")
+        await queue_manager.stop_slot_checker()
+        # Vérifier l'état des files
+        response = await test_client.get("/queue/get_users")
+        assert response.status_code == 200
+        data = response.json()
+        test_logger.info(f"État des files après check_slots: {data}")
+        
+        # Confirmer la connexion
+        response = await test_client.post(f"/queue/confirm/{user_active}")
+        assert response.status_code == 200
+        test_logger.info(f"Connexion confirmée pour {user_active}")
+        
+        # Vérifier l'état après confirmation
+        response = await test_client.get("/queue/get_users")
+        assert response.status_code == 200
+        data = response.json()
+        test_logger.info(f"État des files après confirmation: {data}")
+        assert len(data["active_users"]) == 1, "Devrait avoir 1 utilisateur actif"
+        
+        # 2. Ajouter 5 utilisateurs en attente
+        waiting_users = []
+        for i in range(5):
+            user_id = f"user_wait_{i}"
+            waiting_users.append(user_id)
+            response = await test_client.post(f"/queue/join/{user_id}")
+            assert response.status_code == 200
+            test_logger.info(f"Utilisateur {user_id} ajouté à la file d'attente")
+        
+        # Vérifier l'état après ajout des utilisateurs en attente
+        response = await test_client.get("/queue/get_users")
+        assert response.status_code == 200
+        data = response.json()
+        test_logger.info(f"État des files après ajout des utilisateurs en attente: {data}")
+        assert len(data["waiting_users"]) == 4, "Devrait avoir 5 utilisateurs en attente"
+        assert len(data["draft_users"]) == 1, "Devrait toujours avoir 1 utilisateur actif"
+        assert len(data["active_users"]) == 1, "Devrait toujours avoir 1 utilisateur actif"
+        
+        # 3. Forcer une vérification des slots
+
+        test_logger.info("Vérification forcée finale des slots")
+        
+        # Vérifier l'état final
+        response = await test_client.get("/queue/get_users")
+        assert response.status_code == 200
+        final_data = response.json()
+        test_logger.info(f"État final des files: {final_data}")
+        
+        # Vérifier les nombres d'utilisateurs dans chaque état
+        assert len(final_data["waiting_users"]) == 4, "Devrait avoir 4 utilisateurs en attente"
+        assert len(final_data["draft_users"]) == 1, "Devrait avoir 1 utilisateur en draft"
+        assert len(final_data["active_users"]) == 1, "Devrait avoir 1 utilisateur actif"
+        
+        # Nettoyer Redis à la fin du test
+        await queue_manager.redis.flushdb()
+        test_logger.info("Base Redis nettoyée")
