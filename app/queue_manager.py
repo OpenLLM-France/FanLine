@@ -793,7 +793,7 @@ class QueueManager:
                 if history_exists:
                     await self.redis.ltrim(f'status_history:{user_id}', -100, -1)
             
-            return status_info
+            return status_info | {"user_id": user_id}
             
         except Exception as e:
             logger.error(f"Erreur lors de la récupération du statut pour {user_id}: {str(e)}")
