@@ -624,7 +624,7 @@ class QueueManager:
                             raise Exception("Une ou plusieurs opérations ont échoué")
                         
                     logger.info(f"✅ Connexion confirmée pour {user_id} (session: {self.session_duration}s)")
-                    return True
+                    return {'status': 'active', 'session_duration': self.session_duration, 'message': 'Connexion confirmée'}
                     
             except Exception as e:
                 retry_count += 1
