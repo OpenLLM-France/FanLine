@@ -124,21 +124,25 @@ async def health_check():
     """Endpoint de vérification de santé."""
     return {"status": "ok"}
 
-@app.post("/queue/join/{user_id}")
-async def join_queue(user_id: str, queue_manager: QueueManager = Depends(get_queue_manager)):
+# Définir des modèles Pydantic pour les données
+class QueueActionRequest(BaseModel):
+    user_id: str
+
+@app.post("/queue/join")
+async def join_queue(data: QueueActionRequest, queue_manager: QueueManager = Depends(get_queue_manager)):
     """Ajoute un utilisateur à la file d'attente."""
     try:
-        result = await queue_manager.add_to_queue(user_id)
+        result = await queue_manager.add_to_queue(data.user_id)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/queue/leave/{user_id}")
-async def leave_queue(user_id: str, queue_manager: QueueManager = Depends(get_queue_manager)) -> Dict:
+@app.post("/queue/leave")
+async def leave_queue(data: QueueActionRequest, queue_manager: QueueManager = Depends(get_queue_manager)) -> Dict:
     """Permet à un utilisateur de quitter la file d'attente ou sa session active."""
     try:
         # Vérifier l'état actuel de l'utilisateur
-        current_status = await queue_manager.get_user_status(user_id)
+        current_status = await queue_manager.get_user_status(data.user_id)
         
         # Si l'utilisateur n'existe pas ou n'a jamais été dans le système
         if current_status["status"] is None:
@@ -150,7 +154,7 @@ async def leave_queue(user_id: str, queue_manager: QueueManager = Depends(get_qu
         # Gérer selon l'état actuel
         if current_status["status"] == "waiting":
             # Retirer de la file d'attente mais garder dans accounts_queue
-            success = await queue_manager.remove_from_queue(user_id)
+            success = await queue_manager.remove_from_queue(data.user_id)
             if not success:
                 raise HTTPException(
                     status_code=400,
@@ -159,59 +163,56 @@ async def leave_queue(user_id: str, queue_manager: QueueManager = Depends(get_qu
         elif current_status["status"] == "draft":
             # Retirer du draft mais garder dans accounts_queue
             async with queue_manager.redis.pipeline(transaction=True) as pipe:
-                pipe.srem('draft_users', user_id)
-                pipe.delete(f'draft:{user_id}')
+                pipe.srem('draft_users', data.user_id)
+                pipe.delete(f'draft:{data.user_id}')
                 await pipe.execute()
         elif current_status["status"] == "connected":
             # Retirer de la session active mais garder dans accounts_queue
             async with queue_manager.redis.pipeline(transaction=True) as pipe:
-                pipe.srem('active_users', user_id)
-                pipe.delete(f'session:{user_id}')
+                pipe.srem('active_users', data.user_id)
+                pipe.delete(f'session:{data.user_id}')
                 await pipe.execute()
         elif current_status["status"] == "disconnected":
             # Déjà déconnecté, rien à faire
             return {
                 "previous_status": "disconnected",
                 "new_status": "disconnected",
-                "user_id": user_id,
+                "user_id": data.user_id,
                 "in_accounts_queue": True
             }
         
         # Récupérer le nouveau statut (devrait être "disconnected" car dans accounts_queue)
-        new_status = await queue_manager.get_user_status(user_id)
+        new_status = await queue_manager.get_user_status(data.user_id)
         
         return {
             "previous_status": current_status["status"],
             "new_status": new_status["status"],
-            "user_id": user_id,
-            "in_accounts_queue": await queue_manager.redis.sismember('accounts_queue', user_id)
+            "user_id": data.user_id,
+            "in_accounts_queue": await queue_manager.redis.sismember('accounts_queue', data.user_id)
         }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/queue/confirm/{user_id}")
-async def confirm_queue_connection(
-    user_id: str,
-    queue_manager: QueueManager = Depends(get_queue_manager)
-) -> Dict:
+@app.post("/queue/confirm")
+async def confirm_queue_connection(data: QueueActionRequest, queue_manager: QueueManager = Depends(get_queue_manager)) -> Dict:
     """Confirme la connexion d'un utilisateur."""
     try:
-        result = await queue_manager.confirm_connection(user_id)
+        result = await queue_manager.confirm_connection(data.user_id)
         if result:
-            logger.info(f"✅ Confirmation réussie pour {user_id}, résultat: {result}")
+            logger.info(f"✅ Confirmation réussie pour {data.user_id}, résultat: {result}")
             return {"status": "success", "message": "Connexion confirmée", "result": result}
         else:
-            logger.info(f"ℹ️ Confirmation impossible pour {user_id} - Pas de slot draft disponible, résultat: {result}")
+            logger.info(f"ℹ️ Confirmation impossible pour {data.user_id} - Pas de slot draft disponible, résultat: {result}")
             raise HTTPException(
                 status_code=400,
                 detail=f"No draft slot available, result: {result}"
             )
     except HTTPException as he:
-        logger.error(f"❌ Erreur HTTP lors de la confirmation pour {user_id}: {str(he)}")
+        logger.error(f"❌ Erreur HTTP lors de la confirmation pour {data.user_id}: {str(he)}")
         raise he
     except Exception as e:
-        logger.error(f"❌ Erreur inattendue lors de la confirmation pour {user_id}: {str(e)}")
+        logger.error(f"❌ Erreur inattendue lors de la confirmation pour {data.user_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=str(e)
@@ -252,11 +253,11 @@ async def heartbeat_path(
 
 @app.post("/queue/heartbeat")
 async def heartbeat_body(
-    request: UserRequest,
+    data: QueueActionRequest,
     queue_manager: QueueManager = Depends(get_queue_manager)
 ) -> Dict:
     """Endpoint pour maintenir la session active (via corps JSON)."""
-    return await heartbeat_path(request.user_id, queue_manager)
+    return await heartbeat_path(data.user_id, queue_manager)
 
 @app.get("/queue/metrics")
 async def get_metrics(queue_manager: QueueManager = Depends(get_queue_manager)) -> Dict:
@@ -289,13 +290,10 @@ async def get_users(queue_manager: QueueManager = Depends(get_queue_manager)) ->
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-
-@app.get("/queue/timers/{user_id}")
-async def get_timers(user_id: str, queue_manager: QueueManager = Depends(get_queue_manager)) -> Dict:
+@app.get("/queue/timers")
+async def get_timers(data: QueueActionRequest, queue_manager: QueueManager = Depends(get_queue_manager)) -> Dict:
     """Endpoint pour obtenir les timers actifs d'un utilisateur."""
-    timers = await queue_manager.get_timers(user_id)
-
+    timers = await queue_manager.get_timers(data.user_id)
     # Nettoyer la réponse pour la rendre sérialisable
     if "task" in timers:
         if asyncio.iscoroutine(timers["task"]):

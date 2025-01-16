@@ -1,15 +1,24 @@
 import pytest
 import logging
+import pydantic
+import json
 
 logger = logging.getLogger(__name__)
+
+# Définir un modèle Pydantic pour les données
+class RequestData(pydantic.BaseModel):
+    user_id: str
 
 @pytest.mark.asyncio
 async def test_api_connectivity(queue_test_helper, test_logger):
     """Test la connectivité de base de l'API."""
     test_logger.info("Début du test de connectivité API")
     
-    # Test de tous les endpoints
-    results = await queue_test_helper.test_endpoints()
+    # Exemple de données à envoyer
+    data = RequestData(user_id="test_user")
+    
+    # Test de tous les endpoints avec les données
+    results = await queue_test_helper.test_endpoints(data.user_id)
     
     # Analyse des résultats
     for result in results:

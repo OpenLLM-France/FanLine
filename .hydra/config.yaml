@@ -1,0 +1,7 @@
+gitdefaults:
+  - database: default
+  - server: default
+  - queue: default
+  - test: default
+  - redis: default
+  - celery: default 

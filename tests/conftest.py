@@ -257,23 +257,27 @@ async def queue_test_helper(test_client, test_logger):
             self.client = client
             self.logger = logger
             
-        async def test_endpoints(self):
+        async def test_endpoints(self, data=None):
             """Teste tous les endpoints principaux de la file d'attente."""
             endpoints = [
                 ("/health", "GET"),
                 ("/queue/metrics", "GET"),
-                ("/queue/status/test_user", "GET"),
-                ("/queue/join/test_user", "POST")
+                (f"/queue/status/{data}", "GET"),
+                ("/queue/join", "POST", {"user_id": data})
             ]
             
             results = []
-            for endpoint, method in endpoints:
+            for endpoint_info in endpoints:
+                endpoint = endpoint_info[0]
+                method = endpoint_info[1]
+                request_data = endpoint_info[2] if len(endpoint_info) > 2 else None
+                
                 try:
                     self.logger.debug(f"Test de l'endpoint {method} {endpoint}")
                     if method == "GET":
                         response = await self.client.get(endpoint)
                     else:
-                        response = await self.client.post(endpoint)
+                        response = await self.client.post(endpoint, json=request_data)
                     
                     self.logger.info(f"Réponse de {endpoint}: status={response.status_code}, body={response.text}")
                     results.append({
