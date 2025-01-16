@@ -732,23 +732,24 @@ class QueueManager:
                 
                 session_ttl = await self.redis.ttl(f'session:{user_id}')
                 # Appeler la tâche sans self
-                if DEBUG :
-                    #result = auto_expiration(session_ttl, "active", user_id)
-                    result = await auto_expiration.apply(args=[session_ttl, "session", user_id]).get()
-                    logger.info(f"Tâche d'expiration terminée: {result}")
-                else:
-                    task = auto_expiration.apply_async(args=[session_ttl, "session", user_id])
-                    async_result = task
-                    while not async_result.ready():
-                        await asyncio.sleep(0.1)
-                    result = async_result.get()
-                    logger.info(f"Tâche d'expiration terminée: {result}")
-                    logger.info(f"✅ Tâche active immédiate créée pour {user_id}: {task.id}")
 
                 
                 if session_ttl > 0:
                     status_info["remaining_time"] = session_ttl
                 else:
+                    if DEBUG :
+                        #result = auto_expiration(session_ttl, "active", user_id)
+                        result = await auto_expiration.apply(args=[session_ttl, "session", user_id]).get()
+                        logger.info(f"Tâche d'expiration terminée: {result}")
+                    else:
+                        task = auto_expiration.apply_async(args=[session_ttl, "session", user_id])
+                        async_result = task
+                        while not async_result.ready():
+                            await asyncio.sleep(0.1)
+                        result = async_result.get()
+                        logger.info(f"Tâche d'expiration terminée: {result}")
+                        logger.info(f"✅ Tâche active immédiate créée pour {user_id}: {task.id}")
+
                     status_info["remaining_time"] = 0
                     if recall:
                         return await self.get_user_status(user_id, check_slots, recall=False)
@@ -760,21 +761,22 @@ class QueueManager:
                 }
 
                 draft_ttl = await self.redis.ttl(f'draft:{user_id}')
-                # Appeler la tâche sans self
-                if DEBUG :
-                    result = await auto_expiration.apply(args=[draft_ttl, "draft", user_id]).get()   
-                    logger.info(f"Tâche d'expiration terminée: {result}")
-                else:
-                    task = auto_expiration.apply_async(args=[draft_ttl, "draft", user_id])
-                    async_result = task
-                    while not async_result.ready():
-                        await asyncio.sleep(0.1)
-                    result = async_result.get()
-                    logger.info(f"Tâche d'expiration terminée: {result}")
-                    logger.info(f"✅ Tâche draft immédiate créée pour {user_id}: {task.id}")
+
                 if draft_ttl > 0:
                     status_info["remaining_time"] = draft_ttl
                 else:
+                    # Appeler la tâche sans self
+                    if DEBUG :
+                        result = await auto_expiration.apply(args=[draft_ttl, "draft", user_id]).get()   
+                        logger.info(f"Tâche d'expiration terminée: {result}")
+                    else:
+                        task = auto_expiration.apply_async(args=[draft_ttl, "draft", user_id])
+                        async_result = task
+                        while not async_result.ready():
+                            await asyncio.sleep(0.1)
+                        result = async_result.get()
+                        logger.info(f"Tâche d'expiration terminée: {result}")
+                        logger.info(f"✅ Tâche draft immédiate créée pour {user_id}: {task.id}")
                     status_info["remaining_time"] = 0
                     # Si le TTL est expiré, on lance l'auto-expiration et on rappelle get_user_status
                     if recall:
