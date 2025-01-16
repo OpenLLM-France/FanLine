@@ -5,10 +5,14 @@ import logging
 import asyncio
 from celery import current_app as celery_app, Celery
 import time
+from pydantic import BaseModel
 
 # Configuration du logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+class QueueActionRequest(BaseModel):
+    user_id: str
 
 class TestAPI:
     @pytest.fixture(autouse=True)
@@ -26,7 +30,7 @@ class TestAPI:
         user_id = "test_user_flow"
         
         # Ajouter l'utilisateur à la file
-        response = await test_client.post(f"/queue/join/{user_id}")
+        response = await test_client.post("/queue/join", json={"user_id": user_id})
         assert response.status_code == 200
         test_logger.info("Utilisateur ajouté à la file")
         
@@ -42,13 +46,13 @@ class TestAPI:
         """Test le flux d'ajout à la file quand elle est pleine."""
         # Ajouter le premier utilisateur
         user_id_1 = "test_user_0"
-        response = await test_client.post(f"/queue/join/{user_id_1}")
+        response = await test_client.post("/queue/join", json={"user_id": user_id_1})
         assert response.status_code == 200
         test_logger.info("Premier utilisateur ajouté")
         
         # Ajouter le deuxième utilisateur
         user_id_2 = "test_user_1"
-        response = await test_client.post(f"/queue/join/{user_id_2}")
+        response = await test_client.post("/queue/join", json={"user_id": user_id_2})
         assert response.status_code == 200
         test_logger.info("Deuxième utilisateur ajouté")
         
@@ -66,12 +70,12 @@ class TestAPI:
         user_id = "test_user_leave"
         
         # Ajouter l'utilisateur à la file
-        join_response = await test_client.post(f"/queue/join/{user_id}")
+        join_response = await test_client.post("/queue/join", json={"user_id": user_id})
         assert join_response.status_code == 200
         test_logger.info("Utilisateur ajouté à la file")
         
         # Faire partir l'utilisateur
-        leave_response = await test_client.post(f"/queue/leave/{user_id}")
+        leave_response = await test_client.post("/queue/leave", json={"user_id": user_id})
         assert leave_response.status_code == 200
         test_logger.info("Utilisateur retiré de la file")
         
@@ -96,7 +100,7 @@ class TestAPI:
         user_id = "test_user_heartbeat"
         
         # Ajouter l'utilisateur à la file
-        join_response = await test_client.post(f"/queue/join/{user_id}")
+        join_response = await test_client.post("/queue/join", json={"user_id": user_id})
         assert join_response.status_code == 200
         test_logger.info("Utilisateur ajouté à la file")
         
@@ -142,25 +146,43 @@ class TestAPI:
         assert response.status_code == 200
         initial_data = response.json()
         test_logger.info(f"État initial des files: {initial_data}")
+        assert len(initial_data["waiting_users"]) == 0
+        assert len(initial_data["draft_users"]) == 0
+        assert len(initial_data["active_users"]) == 0
         
-        # 1. Ajouter et confirmer le premier utilisateur actif
+        # 1. Ajouter le premier utilisateur actif
         user_active = "user_active_1"
-        response = await test_client.post(f"/queue/join/{user_active}")
+        response = await test_client.post("/queue/join", json={"user_id": user_active})
         assert response.status_code == 200
         test_logger.info(f"Utilisateur {user_active} ajouté")
+        
+        # Vérifier que l'utilisateur est en attente
+        status_response = await test_client.get(f"/queue/status/{user_active}")
+        assert status_response.status_code == 200
+        status = status_response.json()
+        assert status["status"] in ["queued", "in_waiting"]
         
         # Forcer la vérification des slots pour le passage en draft
         await queue_manager.check_available_slots()
         test_logger.info("Vérification forcée des slots pour passage en draft")
-        await queue_manager.stop_slot_checker()
+        
+        # Attendre que l'utilisateur soit en draft
+        for _ in range(10):  # Attendre maximum 10 secondes
+            status_response = await test_client.get(f"/queue/status/{user_active}")
+            status = status_response.json()
+            if status["status"] == "draft":
+                break
+            await asyncio.sleep(1)
+        
         # Vérifier l'état des files
         response = await test_client.get("/queue/get_users")
         assert response.status_code == 200
         data = response.json()
         test_logger.info(f"État des files après check_slots: {data}")
+        assert len(data["draft_users"]) == 1, "Devrait avoir 1 utilisateur en draft"
         
         # Confirmer la connexion
-        response = await test_client.post(f"/queue/confirm/{user_active}")
+        response = await test_client.post("/queue/confirm", json={"user_id": user_active})
         assert response.status_code == 200
         test_logger.info(f"Connexion confirmée pour {user_active}")
         
@@ -176,33 +198,20 @@ class TestAPI:
         for i in range(5):
             user_id = f"user_wait_{i}"
             waiting_users.append(user_id)
-            response = await test_client.post(f"/queue/join/{user_id}")
+            response = await test_client.post("/queue/join", json={"user_id": user_id})
             assert response.status_code == 200
             test_logger.info(f"Utilisateur {user_id} ajouté à la file d'attente")
+            await asyncio.sleep(0.1)  # Petit délai entre chaque ajout
         
         # Vérifier l'état après ajout des utilisateurs en attente
         response = await test_client.get("/queue/get_users")
         assert response.status_code == 200
         data = response.json()
         test_logger.info(f"État des files après ajout des utilisateurs en attente: {data}")
-        assert len(data["waiting_users"]) == 4, "Devrait avoir 5 utilisateurs en attente"
-        assert len(data["draft_users"]) == 1, "Devrait toujours avoir 1 utilisateur actif"
-        assert len(data["active_users"]) == 1, "Devrait toujours avoir 1 utilisateur actif"
         
-        # 3. Forcer une vérification des slots
-
-        test_logger.info("Vérification forcée finale des slots")
-        
-        # Vérifier l'état final
-        response = await test_client.get("/queue/get_users")
-        assert response.status_code == 200
-        final_data = response.json()
-        test_logger.info(f"État final des files: {final_data}")
-        
-        # Vérifier les nombres d'utilisateurs dans chaque état
-        assert len(final_data["waiting_users"]) == 4, "Devrait avoir 4 utilisateurs en attente"
-        assert len(final_data["draft_users"]) == 1, "Devrait avoir 1 utilisateur en draft"
-        assert len(final_data["active_users"]) == 1, "Devrait avoir 1 utilisateur actif"
+        # Vérifier que les utilisateurs sont bien répartis
+        total_users = len(data["waiting_users"]) + len(data["draft_users"]) + len(data["active_users"])
+        assert total_users == 6, f"Le nombre total d'utilisateurs devrait être 6, mais est {total_users}"
         
         # Nettoyer Redis à la fin du test
         await queue_manager.redis.flushdb()

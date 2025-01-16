@@ -733,6 +733,12 @@ class QueueManager:
                 session_ttl = await self.redis.ttl(f'session:{user_id}')
                 if session_ttl > 0:
                     status_info["remaining_time"] = session_ttl
+
+                else:
+                    # Si le TTL est expiré, on lance l'auto-expiration et on rappelle get_user_status
+                    task = auto_expiration.delay(0, "active", user_id)
+                    logger.info(f"✅ Tâche active immédiate créée pour {user_id}: {task.id}")
+                    return await self.get_user_status(user_id, check_slots)
                     
             elif is_draft:
                 status_info = {
@@ -744,6 +750,11 @@ class QueueManager:
                 draft_ttl = await self.redis.ttl(f'draft:{user_id}')
                 if draft_ttl > 0:
                     status_info["remaining_time"] = draft_ttl
+                else:
+                    # Si le TTL est expiré, on lance l'auto-expiration et on rappelle get_user_status
+                    task = auto_expiration.delay(0, "draft", user_id)
+                    logger.info(f"✅ Tâche draft immédiate créée pour {user_id}: {task.id}")
+                    return await self.get_user_status(user_id, check_slots)
                     
             elif waiting_pos is not None:
                 status_info = {
@@ -1184,10 +1195,15 @@ async def auto_expiration(self, ttl, timer_type, user_id):
             is_active = await redis_client.sismember('active_users', user_id)
             if is_active:
                 await cleanup_session.delay(user_id)
-        else:  # draft
+        elif timer_type == "draft":  # draft
             is_draft = await redis_client.sismember('draft_users', user_id)
             if is_draft:
                 await handle_draft_expiration.delay(user_id)
+        elif timer_type == "waiting":
+            return True
+        else:
+            logging.error(f"Type de timer invalide: {timer_type}")
+            return False
                 
         return True
         
