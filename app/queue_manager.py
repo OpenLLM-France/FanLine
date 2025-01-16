@@ -24,7 +24,7 @@ logger.setLevel(logging.DEBUG)
 
 # Récupération des variables d'environnement Redis
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
-DEBUG = os.getenv('DEBUG', 'false')
+DEBUG = os.getenv('DEBUG', 'true')
 # Configuration de base
 celery.conf.update(
     broker_url=f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}',
@@ -739,7 +739,7 @@ class QueueManager:
                 else:
                     if DEBUG :
                         #result = auto_expiration(session_ttl, "active", user_id)
-                        result = await auto_expiration.apply(args=[session_ttl, "session", user_id]).get()
+                        result = await auto_expiration(session_ttl, "session", user_id)
                         logger.info(f"Tâche d'expiration terminée: {result}")
                     else:
                         task = auto_expiration.apply_async(args=[session_ttl, "session", user_id])
@@ -767,7 +767,7 @@ class QueueManager:
                 else:
                     # Appeler la tâche sans self
                     if DEBUG :
-                        result = await auto_expiration.apply(args=[draft_ttl, "draft", user_id]).get()   
+                        result = await auto_expiration(draft_ttl, "draft", user_id) 
                         logger.info(f"Tâche d'expiration terminée: {result}")
                     else:
                         task = auto_expiration.apply_async(args=[draft_ttl, "draft", user_id])
@@ -1229,9 +1229,7 @@ async def handle_draft_expiration(user_id: str):
 async def auto_expiration(ttl, timer_type, user_id):
     """Gère l'expiration automatique d'une session ou d'un brouillon."""
     # En mode test, retourner True immédiatement
-    if os.environ.get('TESTING') == 'true':
-        logging.info(f"Mode test détecté pour {user_id}, retour immédiat")
-        return True
+
         
     redis_client = None
     try:

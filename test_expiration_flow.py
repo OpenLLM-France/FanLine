@@ -63,22 +63,22 @@ async def test_auto_expiration_flow():
         await redis_client.setex(f"session:{user_id}", session_ttl, "1")
         
         # Vous pouvez mettre un point d'arrêt ici
-        result = await auto_expiration(session_ttl, "active", user_id)
-        logger.info(f"Résultat auto_expiration: {result}")
-        
-        status = await queue_manager.get_user_status(user_id)
-        assert status["status"] == "connected", f"Statut incorrect: {status}"
-        logger.info(f"Status après connexion: {status}")
-
+        #result = await auto_expiration(session_ttl, "active", user_id)
+        #logger.info(f"Résultat auto_expiration: {result}")
         # 4. Attendre l'expiration
         logger.info("⏳ Attente de l'expiration...")
-        await asyncio.sleep(3)
+        await asyncio.sleep(3)    
+        status = await queue_manager.get_user_status(user_id)
+        assert status["status"] == "disconnected", f"Statut incorrect: {status}"
+        logger.info(f"Status après connexion: {status}")
+
+
 
         # Point de debug : Tester directement cleanup_session
         logger.info("Test direct de cleanup_session...")
         # Vous pouvez mettre un point d'arrêt ici
-        result = await cleanup_session(user_id)
-        logger.info(f"Résultat cleanup_session: {result}")
+        #result = await cleanup_session(user_id)
+        #logger.info(f"Résultat cleanup_session: {result}")
 
         # 5. Vérifier l'état final
         status = await queue_manager.get_user_status(user_id)
