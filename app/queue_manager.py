@@ -1166,9 +1166,9 @@ async def auto_expiration(self, ttl, timer_type, user_id):
         logging.info(f"Mode test détecté pour {user_id}, retour immédiat")
         return True
         
-    redis_client = None
+    redis = None
     try:
-        redis_client = Redis(
+        redis = Redis(
             host=os.getenv('REDIS_HOST', 'localhost'),
             port=int(os.getenv('REDIS_PORT', 6379)),
             decode_responses=True
@@ -1176,27 +1176,28 @@ async def auto_expiration(self, ttl, timer_type, user_id):
         
         logging.info(f"🕒 Démarrage de la tâche d'expiration {timer_type} pour {user_id}")
         
-        # Attendre que le TTL expire
         await asyncio.sleep(ttl)
         
         # Vérifier l'état après l'expiration
         if timer_type == "session":
-            is_active = await redis_client.sismember('active_users', user_id)
+            is_active = await redis.sismember('active_users', user_id)
             if is_active:
                 await cleanup_session.delay(user_id)
+                return {"status": "session_expired", "user_id": user_id}
         else:  # draft
-            is_draft = await redis_client.sismember('draft_users', user_id)
+            is_draft = await redis.sismember('draft_users', user_id)
             if is_draft:
                 await handle_draft_expiration.delay(user_id)
+                return {"status": "draft_expired", "user_id": user_id}
                 
-        return True
+        return {"status": "completed", "user_id": user_id}
         
     except Exception as e:
         logging.error(f"❌ Erreur dans la tâche d'expiration pour {user_id}: {str(e)}")
-        return True  # On retourne True même en cas d'erreur pour ne pas bloquer le test
+        return {"status": "error", "user_id": user_id, "error": str(e)}
     finally:
-        if redis_client:
-            await redis_client.aclose()
+        if redis:
+            await redis.aclose()
             logging.debug(f"Connexion Redis fermée pour {user_id}")
 
 @celery.task(name='app.queue_manager.update_timer_channel')
