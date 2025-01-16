@@ -702,7 +702,7 @@ class QueueManager:
 
         return False
 
-    async def get_user_status(self, user_id: str, check_slots: bool = True) -> Dict:
+    async def get_user_status(self, user_id: str, check_slots: bool = True, recall =True) -> Dict:
         """Récupère le statut actuel d'un utilisateur."""
         try:
             # Vérifier si l'utilisateur existe dans un des états possibles
@@ -731,30 +731,33 @@ class QueueManager:
                 
                 # Vérifier le TTL de la session
                 session_ttl = await self.redis.ttl(f'session:{user_id}')
+                # Si le TTL est expiré, on lance l'auto-expiration et on rappelle get_user_status
+                task = auto_expiration.delay(session_ttl, "active", user_id)
+                logger.info(f"✅ Tâche active immédiate créée pour {user_id}: {task.id}")
                 if session_ttl > 0:
                     status_info["remaining_time"] = session_ttl
 
                 else:
-                    # Si le TTL est expiré, on lance l'auto-expiration et on rappelle get_user_status
-                    task = auto_expiration.delay(0, "active", user_id)
-                    logger.info(f"✅ Tâche active immédiate créée pour {user_id}: {task.id}")
-                    return await self.get_user_status(user_id, check_slots)
+                    if recall:
+                        return await self.get_user_status(user_id, check_slots, recall=False)
+
                     
             elif is_draft:
                 status_info = {
                     "status": "draft",
                     "position": -1
                 }
-                
+
                 # Vérifier le TTL du draft
                 draft_ttl = await self.redis.ttl(f'draft:{user_id}')
+                task = auto_expiration.delay(draft_ttl, "draft", user_id)
+                logger.info(f"✅ Tâche draft immédiate créée pour {user_id}: {task.id}")
                 if draft_ttl > 0:
                     status_info["remaining_time"] = draft_ttl
                 else:
                     # Si le TTL est expiré, on lance l'auto-expiration et on rappelle get_user_status
-                    task = auto_expiration.delay(0, "draft", user_id)
-                    logger.info(f"✅ Tâche draft immédiate créée pour {user_id}: {task.id}")
-                    return await self.get_user_status(user_id, check_slots)
+                    if recall:
+                        return await self.get_user_status(user_id, check_slots, recall=False)
                     
             elif waiting_pos is not None:
                 status_info = {
