@@ -24,7 +24,7 @@ logger.setLevel(logging.DEBUG)
 
 # Récupération des variables d'environnement Redis
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
-DEBUG = bool(os.getenv('DEBUG', 'true'))
+DEBUG = os.getenv('DEBUG', 'false')
 # Configuration de base
 celery.conf.update(
     broker_url=f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}',
