@@ -2,18 +2,16 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Python: Test Debug",
+      "name": "Python: Current File",
       "type": "python",
       "request": "launch",
+      "program": "${file}",
       "console": "integratedTerminal",
-      "program": "${workspaceFolder}/tests/test_debug_get_users_endpoint.py",
       "justMyCode": false,
       "env": {
+        "TESTING": "true",
         "PYTHONPATH": "${workspaceFolder}"
-      },
-      "args": [
-        "-m", "pytest", "--disable-warnings"
-      ]
+      }
     }
   ]
 }

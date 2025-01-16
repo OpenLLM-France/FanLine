@@ -8,6 +8,7 @@ import time
 import logging
 from typing import Dict, Any, List
 import datetime
+
 # Configuration de Celery
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
@@ -23,7 +24,7 @@ logger.setLevel(logging.DEBUG)
 
 # Récupération des variables d'environnement Redis
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
-
+DEBUG = bool(os.getenv('DEBUG', 'true'))
 # Configuration de base
 celery.conf.update(
     broker_url=f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}',
@@ -702,7 +703,7 @@ class QueueManager:
 
         return False
 
-    async def get_user_status(self, user_id: str, check_slots: bool = True, recall =True) -> Dict:
+    async def get_user_status(self, user_id: str, check_slots: bool = True, recall=True) -> Dict:
         """Récupère le statut actuel d'un utilisateur."""
         try:
             # Vérifier si l'utilisateur existe dans un des états possibles
@@ -729,18 +730,28 @@ class QueueManager:
                     "position": -2
                 }
                 
-                # Vérifier le TTL de la session
                 session_ttl = await self.redis.ttl(f'session:{user_id}')
-                # Si le TTL est expiré, on lance l'auto-expiration et on rappelle get_user_status
-                task = auto_expiration.delay(session_ttl, "active", user_id)
-                logger.info(f"✅ Tâche active immédiate créée pour {user_id}: {task.id}")
+                # Appeler la tâche sans self
+                if DEBUG :
+                    #result = auto_expiration(session_ttl, "active", user_id)
+                    result = await auto_expiration.apply(args=[session_ttl, "session", user_id]).get()
+                    logger.info(f"Tâche d'expiration terminée: {result}")
+                else:
+                    task = auto_expiration.apply_async(args=[session_ttl, "session", user_id])
+                    async_result = task
+                    while not async_result.ready():
+                        await asyncio.sleep(0.1)
+                    result = async_result.get()
+                    logger.info(f"Tâche d'expiration terminée: {result}")
+                    logger.info(f"✅ Tâche active immédiate créée pour {user_id}: {task.id}")
+
+                
                 if session_ttl > 0:
                     status_info["remaining_time"] = session_ttl
-
                 else:
+                    status_info["remaining_time"] = 0
                     if recall:
                         return await self.get_user_status(user_id, check_slots, recall=False)
-
                     
             elif is_draft:
                 status_info = {
@@ -748,13 +759,23 @@ class QueueManager:
                     "position": -1
                 }
 
-                # Vérifier le TTL du draft
                 draft_ttl = await self.redis.ttl(f'draft:{user_id}')
-                task = auto_expiration.delay(draft_ttl, "draft", user_id)
-                logger.info(f"✅ Tâche draft immédiate créée pour {user_id}: {task.id}")
+                # Appeler la tâche sans self
+                if DEBUG :
+                    result = await auto_expiration.apply(args=[draft_ttl, "draft", user_id]).get()   
+                    logger.info(f"Tâche d'expiration terminée: {result}")
+                else:
+                    task = auto_expiration.apply_async(args=[draft_ttl, "draft", user_id])
+                    async_result = task
+                    while not async_result.ready():
+                        await asyncio.sleep(0.1)
+                    result = async_result.get()
+                    logger.info(f"Tâche d'expiration terminée: {result}")
+                    logger.info(f"✅ Tâche draft immédiate créée pour {user_id}: {task.id}")
                 if draft_ttl > 0:
                     status_info["remaining_time"] = draft_ttl
                 else:
+                    status_info["remaining_time"] = 0
                     # Si le TTL est expiré, on lance l'auto-expiration et on rappelle get_user_status
                     if recall:
                         return await self.get_user_status(user_id, check_slots, recall=False)
@@ -1064,8 +1085,28 @@ class QueueManager:
             logger.error(f"Erreur lors du nettoyage de la session pour {user_id}: {str(e)}")
             return False
 
-@celery.task(name='app.queue_manager.cleanup_session', bind=True)
-async def cleanup_session(self, user_id: str):
+    async def old_auto_expiration(self, ttl, timer_type, user_id):
+        """Version asynchrone de auto_expiration qui gère la tâche Celery."""
+        try:
+            task = auto_expiration.apply_async(args=[ttl, timer_type, user_id])
+            start_time = asyncio.get_event_loop().time()
+            
+            while not task.ready():
+                if asyncio.get_event_loop().time() - start_time > 5:
+                    logger.warning(f"Timeout atteint pour la tâche {task.id}")
+                    break
+                await asyncio.sleep(0.1)
+            
+            result = task.get(timeout=1)
+            logger.info(f"Tâche d'expiration terminée: {result}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de l'expiration: {e}")
+            return False
+
+@celery.task(name='cleanup_session')
+async def cleanup_session(user_id: str):
     """Nettoie la session d'un utilisateur."""
     logger.info(f"Début de la tâche de nettoyage de session pour {user_id}")
     redis = None
@@ -1086,7 +1127,7 @@ async def cleanup_session(self, user_id: str):
             
             # On nettoie si l'utilisateur est actif, même si la session n'existe plus
             if not is_active:
-                logger.warning(f"5 État invalide pour nettoyage: active={is_active}, has_session={has_session}")
+                logger.warning(f"État invalide pour nettoyage: active={is_active}, has_session={has_session}")
                 return True
         
         # Effectuer le nettoyage
@@ -1107,19 +1148,32 @@ async def cleanup_session(self, user_id: str):
             
         # Publier la notification
         await redis.publish(f'queue_status:{user_id}', status_json)
-        logger.info(f"Session nettoyée avec succès pour {user_id}")
-        return True
+        
+        # Vérifier l'état final avec les méthodes existantes
+        expected_state = {
+            'in_queue': False,
+            'in_waiting': False,
+            'in_draft': False,
+            'in_active': False,
+            'in_accounts_queue': True  # L'utilisateur doit rester dans accounts_queue
+        }
+        
+        # Créer une instance temporaire de QueueManager pour utiliser ses méthodes
+        queue_manager = QueueManager(redis)
+        current_state = await queue_manager._get_current_state(user_id)
+        
+        if not await queue_manager._verify_queue_state(user_id, expected_state, message="État après cleanup_session"):
+            raise Exception(f"État incohérent après cleanup_session pour {user_id}. État actuel: {current_state}")
+        
+        logger.info(f"Session nettoyée avec succès pour {user_id}. État final: {current_state}")
+        return status_info
         
     except Exception as e:
         logger.error(f"Erreur lors du nettoyage de la session de {user_id}: {str(e)}")
         return False
-    finally:
-        if redis:
-            await redis.aclose()
-            logger.debug(f"Connexion Redis fermée pour {user_id}")
 
-@celery.task(name='app.queue_manager.handle_draft_expiration', bind=True)
-async def handle_draft_expiration(self, user_id: str):
+@celery.task(name='handle_draft_expiration')
+async def handle_draft_expiration(user_id: str):
     """Gère l'expiration du draft d'un utilisateur."""
     logger.info(f"Début de la tâche d'expiration de draft pour {user_id}")
     redis = None
@@ -1140,7 +1194,7 @@ async def handle_draft_expiration(self, user_id: str):
             is_draft, has_draft, is_queued = results
             
             if not is_draft or is_queued:
-                logger.warning(f" 4 État invalide pour expiration: draft={is_draft}, has_draft={has_draft}, queued={is_queued}")
+                logger.warning(f"État invalide pour expiration: draft={is_draft}, has_draft={has_draft}, queued={is_queued}")
                 return True
         
         # Effectuer la transition
@@ -1162,18 +1216,15 @@ async def handle_draft_expiration(self, user_id: str):
         # Publier la notification
         await redis.publish(f'queue_status:{user_id}', status_json)
         logger.info(f"Draft expiré avec succès pour {user_id}")
-        return True
+        return status_info
         
     except Exception as e:
         logger.error(f"Erreur lors de l'expiration du draft de {user_id}: {str(e)}")
         return False
-    finally:
-        if redis:
-            await redis.aclose()
-            logger.debug(f"Connexion Redis fermée pour {user_id}")
 
-@celery.task(name='app.queue_manager.auto_expiration', bind=True)
-async def auto_expiration(self, ttl, timer_type, user_id):
+
+@celery.task(name='auto_expiration')
+async def auto_expiration(ttl, timer_type, user_id):
     """Gère l'expiration automatique d'une session ou d'un brouillon."""
     # En mode test, retourner True immédiatement
     if os.environ.get('TESTING') == 'true':
@@ -1188,27 +1239,34 @@ async def auto_expiration(self, ttl, timer_type, user_id):
             decode_responses=True
         )
         
-        logging.info(f"🕒 Démarrage de la tâche d'expiration {timer_type} pour {user_id}")
+        logging.info(f"Démarrage de la tâche d'expiration {timer_type} pour {user_id}")
         
         # Attendre que le TTL expire
+        if ttl < 0:
+            ttl = 0
         await asyncio.sleep(ttl)
         
         # Vérifier l'état après l'expiration
         if timer_type == "session":
             is_active = await redis_client.sismember('active_users', user_id)
             if is_active:
-                await cleanup_session.delay(user_id)
+               if DEBUG == 'true'  :
+                   logging.info(f"🧹 Nettoyage de la session pour {user_id}")
+                   return await cleanup_session.apply(args=[user_id]).get()
+               else : 
+                return await cleanup_session.delay(user_id)
         elif timer_type == "draft":  # draft
+            logging.info(f"🧹 Nettoyage du draft pour {user_id}")
             is_draft = await redis_client.sismember('draft_users', user_id)
             if is_draft:
-                await handle_draft_expiration.delay(user_id)
+               if DEBUG == 'true' :
+                   return  await handle_draft_expiration.apply(args=[user_id]).get()
+               else:
+                return await handle_draft_expiration.delay(user_id)
         elif timer_type == "waiting":
-            return True
-        else:
-            logging.error(f"Type de timer invalide: {timer_type}")
-            return False
-                
-        return True
+            return "Error"
+        raise Exception(f"Type de timer invalide: {timer_type}")
+
         
     except Exception as e:
         logging.error(f"❌ Erreur dans la tâche d'expiration pour {user_id}: {str(e)}")

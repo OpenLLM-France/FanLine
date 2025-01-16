@@ -7,13 +7,12 @@ logger = logging.getLogger(__name__)
 
 class TestAutoExpiration:
     @pytest.mark.asyncio
-    async def test_auto_expiration_flow(self, test_client, queue_manager, test_logger):
+    async def test_auto_expiration_flow(self, queue_manager:QueueManager, test_logger, redis_client):
         """Test le flux complet d'auto-expiration (draft -> connected -> expired)."""
         user_id = "test_auto_expiration"
         
         # 1. Ajouter l'utilisateur à la file
-        response = await test_client.post("/queue/join", json={"user_id": user_id})
-        assert response.status_code == 200
+        response = await queue_manager.add_to_queue(user_id)
         test_logger.info("Utilisateur ajouté à la file")
         status = await queue_manager.get_user_status(user_id)
 
@@ -30,9 +29,11 @@ class TestAutoExpiration:
         test_logger.info(f"TTL du draft: {draft_ttl}")
 
         # 3. Confirmer la connexion avec un TTL court
-        await redis_client.setex(f"session:{user_id}", 2, "1")  # TTL de 2 secondes pour le test
-        response = await test_client.post("/queue/confirm", json={"user_id": user_id})
-        assert response.status_code == 200
+
+        response = await queue_manager.confirm_connection(user_id)
+        session_ttl = await redis_client.ttl(f'session:{user_id}')
+        await redis_client.setex(f"session:{user_id}", 2, "0")  # TTL de 2 secondes pour le test
+        session_ttl = await redis_client.ttl(f'session:{user_id}')
         test_logger.info("Connexion confirmée")
 
         # Vérifier que l'utilisateur est connecté
