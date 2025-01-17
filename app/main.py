@@ -128,6 +128,12 @@ async def health_check():
 class QueueActionRequest(BaseModel):
     user_id: str
 
+class DurationUpdate(BaseModel):
+    duration: int  # en secondes
+
+class MaxUsersUpdate(BaseModel):
+    max_users: int
+
 @app.post("/queue/join")
 async def join_queue(data: QueueActionRequest, queue_manager: QueueManager = Depends(get_queue_manager)):
     """Ajoute un utilisateur à la file d'attente."""
@@ -201,7 +207,7 @@ async def confirm_queue_connection(data: QueueActionRequest, queue_manager: Queu
         result = await queue_manager.confirm_connection(data.user_id)
         if result:
             logger.info(f"✅ Confirmation réussie pour {data.user_id}, résultat: {result}")
-            return {"status": "success", "message": "Connexion confirmée", "result": result}
+            return {"status": "success", "message": "Connexion confirmée", "result": result, "session_duration": result["session_duration"]}
         else:
             logger.info(f"ℹ️ Confirmation impossible pour {data.user_id} - Pas de slot draft disponible, résultat: {result}")
             raise HTTPException(
@@ -331,3 +337,85 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
     except Exception as e:
         print(f"Erreur WebSocket pour {user_id}: {str(e)}")
         manager.disconnect(user_id) 
+
+@app.post("/queue/cleanup_all")
+async def cleanup_all(queue_manager: QueueManager = Depends(get_queue_manager)):
+    """Nettoie toutes les files d'attente."""
+    try:
+        result = await queue_manager.cleanup_all()
+        if result:
+            return {"status": "success", "message": "Files d'attente nettoyées"}
+        return {"status": "error", "message": "Erreur lors du nettoyage"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) 
+
+@app.post("/queue/update_draft_duration")
+async def update_draft_duration(
+    data: DurationUpdate,
+    queue_manager: QueueManager = Depends(get_queue_manager)
+) -> Dict:
+    """Met à jour la durée du draft."""
+    try:
+        success = await queue_manager.update_draft_duration(data.duration)
+        if success:
+            return {
+                "status": "success",
+                "message": f"Durée du draft mise à jour: {data.duration} secondes",
+                "response": json.dumps(success)
+            }
+        raise HTTPException(
+            status_code=400,
+            detail="Erreur lors de la mise à jour de la durée du draft"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/queue/update_session_duration")
+async def update_session_duration(
+    data: DurationUpdate,
+    queue_manager: QueueManager = Depends(get_queue_manager)
+) -> Dict:
+    """Met à jour la durée de la session."""
+    try:
+        success = await queue_manager.update_session_duration(data.duration)
+        if success:
+            return {
+                "status": "success",
+                "message": f"Durée de session mise à jour: {data.duration} secondes",
+                "response": json.dumps(success)
+            }
+        raise HTTPException(
+            status_code=400,
+            detail="Erreur lors de la mise à jour de la durée de session"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/queue/update_max_users")
+async def update_max_users(
+    data: MaxUsersUpdate,
+    queue_manager: QueueManager = Depends(get_queue_manager)
+) -> Dict:
+    """Met à jour le nombre maximum d'utilisateurs actifs."""
+    try:
+        if data.max_users < 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Le nombre maximum d'utilisateurs doit être supérieur à 0"
+            )
+            
+        success = await queue_manager.update_max_users(data.max_users)
+        if success:
+            return {
+                "status": "success",
+                "message": f"Nombre maximum d'utilisateurs mis à jour: {data.max_users}",
+                "response": json.dumps(success)
+            }
+        raise HTTPException(
+            status_code=400,
+            detail="Erreur lors de la mise à jour du nombre maximum d'utilisateurs"
+        )
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) 

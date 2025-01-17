@@ -74,8 +74,7 @@ class QueueManager:
         self.max_active_users = 10  # Valeur par défaut
         self._slot_check_task = None
         self._stop_slot_check = False
-        self.draft_duration = 60  # Durée du draft en secondes
-        self.session_duration = 300  # Durée de la session en secondes
+
         self._slot_check_interval = 2.0  # Intervalle de vérification des slots en secondes
         self._timer_tasks = {}  # Pour stocker les tâches de timer par user_id
         self.connection_manager = None
@@ -83,12 +82,19 @@ class QueueManager:
         
         # Configurations
         self.max_active_users = int(os.getenv('MAX_ACTIVE_USERS', 2))
-        self.draft_duration = int(os.getenv('DRAFT_DURATION', 300))  # 5 minutes
-        self.session_duration = int(os.getenv('SESSION_DURATION', 1200))  # 20 minutes
+        self.draft_duration = 300  # 5 minutes
+        self.session_duration = 1200 # 20 minutes
 
     def set_connection_manager(self, manager):
         """Définit le gestionnaire de connexions WebSocket."""
         self.connection_manager = manager
+
+    def update_draft_duration(self, duration: int):
+        """Met à jour la durée du draft."""
+        self.draft_duration = duration
+    def update_session_duration(self, duration: int):
+        """Met à jour la durée de la session."""
+        self.session_duration = duration
 
     async def _send_timer_update(self, user_id: str, timer_type: str, ttl: int):
         """Envoie une mise à jour de timer via WebSocket."""
@@ -1106,6 +1112,57 @@ class QueueManager:
             
         except Exception as e:
             logger.error(f"Erreur lors de l'expiration: {e}")
+            return False
+
+    async def cleanup_all(self):
+        """Nettoie complètement toutes les files d'attente."""
+        try:
+            # Récupérer tous les utilisateurs
+            active_users = await self.redis.smembers("active_users")
+            draft_users = await self.redis.smembers("draft_users")
+            waiting_users = await self.redis.smembers("waiting_users")
+            
+            # Supprimer les clés spécifiques pour chaque utilisateur
+            pipe = self.redis.pipeline()
+            for user_id in active_users | draft_users | waiting_users:
+                pipe.delete(f"session:{user_id}")
+                pipe.delete(f"draft:{user_id}")
+                pipe.delete(f"status_history:{user_id}")
+                pipe.delete(f"timer:{user_id}")
+            
+            # Supprimer les sets principaux
+            pipe.delete("active_users")
+            pipe.delete("draft_users")
+            pipe.delete("waiting_users")
+            
+            # Exécuter toutes les commandes
+            await pipe.execute()
+            
+            return True
+        except Exception as e:
+            logger.error(f"Erreur lors du nettoyage complet: {e}")
+            return False
+
+    async def update_max_users(self, new_max: int) -> bool:
+        """Met à jour le nombre maximum d'utilisateurs actifs.
+        
+        Args:
+            new_max (int): Nouveau nombre maximum d'utilisateurs
+            
+        Returns:
+            bool: True si la mise à jour a réussi, False sinon
+        """
+        try:
+            if new_max < 1:
+                logger.error("Le nombre maximum d'utilisateurs doit être supérieur à 0")
+                return False
+            
+            self.max_active_users = new_max
+            logger.info(f"Nombre maximum d'utilisateurs mis à jour: {new_max}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de la mise à jour du nombre maximum d'utilisateurs: {e}")
             return False
 
 
