@@ -224,7 +224,7 @@ async def confirm_queue_connection(data: QueueActionRequest, queue_manager: Queu
             detail=str(e)
         )
 
-@app.get("/queue/status/")
+@app.post("/queue/status/")
 async def get_status(data: QueueActionRequest, queue_manager: QueueManager = Depends(get_queue_manager)):
     """Récupère le statut d'un utilisateur."""
     user_id = data.user_id
