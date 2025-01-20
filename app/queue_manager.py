@@ -89,10 +89,10 @@ class QueueManager:
         """Définit le gestionnaire de connexions WebSocket."""
         self.connection_manager = manager
 
-    def update_draft_duration(self, duration: int):
+    async def update_draft_duration(self, duration: int):
         """Met à jour la durée du draft."""
         self.draft_duration = duration
-    def update_session_duration(self, duration: int):
+    async def update_session_duration(self, duration: int):
         """Met à jour la durée de la session."""
         self.session_duration = duration
 
