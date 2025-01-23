@@ -2408,7 +2408,7 @@ poetry run test docker
 | `/queue/join/` payload = id | POST | Rejoindre la file d'attente | `{"status": "success"}` |
 | `/queue/confirm/` payload = id | POST | Confirmer la connexion | `{"status": "success"}` |
 | `/queue/leave/` payload = id | POST | Quitter la file | `{"status": "success"}` |
-| `/queue/status/` payload = id | GET | Obtenir le statut | `{"status": "waiting", "position": 5}` |
+| `/queue/status/` payload = id | GET | Obtenir le statut | `{"status": "waiting", "position": 5, "timestamp": "2024-01-20 15:30:00", "remaining_time": 60}` '|' if error `{"status": "error", "message": "error message"}` |
 | `/queue/metrics` | GET | Obtenir les métriques | `{"active_users": 50, "waiting_users": 5, "draft_users": ["user1", "user2"], "total_slots": 50, "total_accounts": 100}` |
 | `/queue/cleanup_all` | POST | Nettoyage de la file | `{"status": "success"}` |
 | `/queue/get_users` | GET | Obtenir les utilisateurs active et draft | `{"active_users": 50, "waiting_users": 5, "draft_users": ["user1", "user2"], "total_slots": 50, "total_accounts": 100}` |
