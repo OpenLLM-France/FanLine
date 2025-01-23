@@ -2403,14 +2403,19 @@ poetry run test docker
 ## API Reference
 
 ### Endpoints REST FastAPI
-| Endpoint | Méthode | Description |
-|----------|---------|-------------|
-| `/queue/join/{user_id}` | POST | Rejoindre la file d'attente |
-| `/queue/confirm/{user_id}` | POST | Confirmer la connexion |
-| `/queue/leave/{user_id}` | POST | Quitter la file |
-| `/queue/status/{user_id}` | GET | Obtenir le statut |
-| `/queue/metrics` | GET | Obtenir les métriques |
-
+| Endpoint | Méthode | Description | Format Retour |
+|----------|---------|-------------|-------------|
+| `/queue/join/` payload = id | POST | Rejoindre la file d'attente | `{"status": "success"}` |
+| `/queue/confirm/` payload = id | POST | Confirmer la connexion | `{"status": "success"}` |
+| `/queue/leave/` payload = id | POST | Quitter la file | `{"status": "success"}` |
+| `/queue/status/` payload = id | GET | Obtenir le statut | `{"status": "waiting", "position": 5}` |
+| `/queue/metrics` | GET | Obtenir les métriques | `{"active_users": 50, "waiting_users": 5, "draft_users": ["user1", "user2"], "total_slots": 50, "total_accounts": 100}` |
+| `/queue/cleanup_all` | POST | Nettoyage de la file | `{"status": "success"}` |
+| `/queue/get_users` | GET | Obtenir les utilisateurs active et draft | `{"active_users": 50, "waiting_users": 5, "draft_users": ["user1", "user2"], "total_slots": 50, "total_accounts": 100}` |
+| `/queue/update_max_users` | POST | Mettre à jour le nombre maximum d'utilisateurs | `{"status": "success"}` |
+| `/queue/update_session_duration` | POST | Mettre à jour la durée de la session | `{"status": "success"}` |
+| `/queue/update_draft_duration` | POST | Mettre à jour la durée du draft | `{"status": "success"}` |
+| `/health` | GET | Vérifier la santé du service |
 
 ### États utilisateur
 - **Waiting** : En attente dans la file (position > 0)

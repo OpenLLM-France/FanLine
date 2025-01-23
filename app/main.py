@@ -234,37 +234,30 @@ async def get_status(data: QueueActionRequest, queue_manager: QueueManager = Dep
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/queue/heartbeat/{user_id}")
+@app.post("/queue/heartbeat/")
 async def heartbeat_path(
-    user_id: str,
+    data: QueueActionRequest,
     queue_manager: QueueManager = Depends(get_queue_manager)
 ) -> Dict:
     """Endpoint pour maintenir la session active (via paramètre URL)."""
-    success = await queue_manager.extend_session(user_id)
+    success = await queue_manager.extend_session(data.user_id)
     if not success:
         raise HTTPException(status_code=404, detail="No active session found")
     
     # Vérifier que l'utilisateur est toujours dans active_users
-    is_active = await queue_manager.redis.sismember("active_users", user_id)
+    is_active = await queue_manager.redis.sismember("active_users", data.user_id)
     if not is_active:
         raise HTTPException(status_code=404, detail="User not in active users")
     
     # Récupérer le TTL actuel
-    ttl = await queue_manager.redis.ttl(f"session:{user_id}")
+    ttl = await queue_manager.redis.ttl(f"session:{data.user_id}")
     
     return {
         "status": "extended",
-        "user_id": user_id,
+        "user_id": data.user_id,
         "ttl": ttl
     }
 
-@app.post("/queue/heartbeat")
-async def heartbeat_body(
-    data: QueueActionRequest,
-    queue_manager: QueueManager = Depends(get_queue_manager)
-) -> Dict:
-    """Endpoint pour maintenir la session active (via corps JSON)."""
-    return await heartbeat_path(data.user_id, queue_manager)
 
 @app.get("/queue/metrics")
 async def get_metrics(queue_manager: QueueManager = Depends(get_queue_manager)) -> Dict:
