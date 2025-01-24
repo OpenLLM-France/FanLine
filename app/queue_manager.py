@@ -1067,7 +1067,7 @@ class QueueManager:
             real_waiting_users = [user for user in waiting_users if user.encode() not in draft_users]
             
             # Convertir les draft_users en liste
-            decoded_draft_users = list(draft_users)
+            decoded_draft_users = len(draft_users)
             
             return {
                 "active_users": real_active_users,
