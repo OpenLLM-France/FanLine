@@ -134,6 +134,36 @@ class DurationUpdate(BaseModel):
 class MaxUsersUpdate(BaseModel):
     max_users: int
 
+
+@app.post("/queue/update_draft_duration")
+async def update_draft_duration(data: DurationUpdate, queue_manager: QueueManager = Depends(get_queue_manager)):
+    """Met à jour la durée du draft."""
+    try:
+        await queue_manager.update_draft_duration(data.duration)
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/queue/update_session_duration")
+async def update_session_duration(data: DurationUpdate, queue_manager: QueueManager = Depends(get_queue_manager)):
+    """Met à jour la durée de la session."""
+    try:
+        await queue_manager.update_session_duration(data.duration)
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/queue/update_max_users")
+async def update_max_users(data: MaxUsersUpdate, queue_manager: QueueManager = Depends(get_queue_manager)):
+    """Met à jour le nombre maximum d'utilisateurs."""
+    try:
+        queue_manager.max_active_users = data.max_users
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 @app.post("/queue/join")
 async def join_queue(data: QueueActionRequest, queue_manager: QueueManager = Depends(get_queue_manager)):
     """Ajoute un utilisateur à la file d'attente."""

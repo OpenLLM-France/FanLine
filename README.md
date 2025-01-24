@@ -2415,15 +2415,18 @@ poetry run test docker
 | `/queue/update_max_users` | POST | Mettre à jour le nombre maximum d'utilisateurs | `{"status": "success"}` |
 | `/queue/update_session_duration` | POST | Mettre à jour la durée de la session | `{"status": "success"}` |
 | `/queue/update_draft_duration` | POST | Mettre à jour la durée du draft | `{"status": "success"}` |
-| `/health` | GET | Vérifier la santé du service |
+| `/health` | GET | Vérifier la santé du service | `{"status": "success"}` |
+| `/queue/leave` | POST | Quitter la file | `{"status": "success"}` |
 
 ### États utilisateur
 - **Waiting** : En attente dans la file (position > 0)
 - **Draft** : Slot disponible et temporairement réservé (5 minutes pour confirmer)
 - **Connected** : Session active (20 minutes)
 - **Disconnected** : Déconnecté du système
+- **None** : Utilisateur non trouvé
 
 ### Transitions d'états
+0. `None -> Waiting` | `Disconnected -> Waiting` : Utilisateur non trouvé, ou déconnecté
 1. `Waiting → Draft` : Quand un slot devient disponible
 2. `Draft → Connected` : Après confirmation dans les 5 minutes
 3. `Draft → Waiting` : Si pas de confirmation dans les 5 minutes (retour en file)

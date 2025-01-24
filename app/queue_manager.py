@@ -95,6 +95,13 @@ class QueueManager:
     async def update_session_duration(self, duration: int):
         """Met à jour la durée de la session."""
         self.session_duration = duration
+        
+    async def update_max_active_users(self, max_users: int):
+        """Met à jour le nombre maximum d'utilisateurs actifs."""
+        if max_users < 1:
+            raise ValueError("Le nombre maximum d'utilisateurs doit être supérieur à 0")
+        self.max_active_users = max_users
+        logger.info(f"Nombre maximum d'utilisateurs actifs mis à jour: {max_users}")
 
     async def _send_timer_update(self, user_id: str, timer_type: str, ttl: int):
         """Envoie une mise à jour de timer via WebSocket."""
